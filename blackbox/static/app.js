@@ -1,0 +1,662 @@
+/* BlackBox web UI — vanilla JS, hand-drawn SVG charts. */
+"use strict";
+
+// ---------------------------------------------------------------- utils
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const nf = new Intl.NumberFormat("tr-TR");
+const num = (v, d = 0) => (v == null || Number.isNaN(v) ? "–" : new Intl.NumberFormat("tr-TR", { minimumFractionDigits: d, maximumFractionDigits: d }).format(v));
+const ratio = (k, d) => (k == null ? "–" : d ? num(k / d, 2) : `${k}/0`);
+const pct = (a, b) => (b ? `%${Math.round((100 * a) / b)}` : "–");
+const mmss = (s) => (s == null ? "–" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
+const dt = (iso) => (iso ? iso.slice(0, 16).replace("T", " ") : "–");
+const day = (iso) => {
+  if (!iso) return "–";
+  const d = new Date(iso);
+  return d.toLocaleDateString("tr-TR", { day: "2-digit", month: "short" }) + " " + iso.slice(11, 16);
+};
+const resultTag = (r) => (r === "win" ? '<span class="tag win">Zafer</span>' : r === "loss" ? '<span class="tag loss">Yenilgi</span>' : '<span class="tag none">Bilinmiyor</span>');
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } },
+};
+
+async function api(path, params) {
+  const q = params ? "?" + new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString() : "";
+  const r = await fetch(`/api/${path}${q}`);
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+// tooltip
+const tip = $("#tip");
+function showTip(html, e) {
+  tip.innerHTML = html;
+  tip.classList.add("on");
+  const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8);
+  const y = e.clientY + 16 + tip.offsetHeight > innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 16;
+  tip.style.left = x + "px";
+  tip.style.top = y + "px";
+}
+const hideTip = () => tip.classList.remove("on");
+document.addEventListener("mousemove", (e) => {
+  const t = e.target.closest("[data-tip]");
+  if (t) showTip(t.dataset.tip, e); else if (!e.target.closest("[data-tip-live]")) hideTip();
+});
+
+// ---------------------------------------------------------------- state
+const state = { filters: store.get("bb-filters", { type: "air" }), player: "" };
+
+function setTheme(name) {
+  document.documentElement.dataset.theme = name;
+  try { localStorage.setItem("bb-theme", name); } catch { /* ignore */ }
+  $$(".themes button").forEach((b) => b.classList.toggle("on", b.dataset.themeSet === name));
+}
+
+// ---------------------------------------------------------------- filters UI
+async function loadFilterOptions() {
+  const f = state.filters;
+  const o = await api("filters", { type: f.type });
+  const sv = $("#fVehicle"), sm = $("#fMap");
+  sv.innerHTML = '<option value="">Tüm araçlar</option>' + o.vehicles.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join("");
+  sm.innerHTML = '<option value="">Tüm haritalar</option>' + o.maps.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+  if (f.vehicle && !o.vehicles.some((v) => v.id === f.vehicle)) delete f.vehicle;
+  if (f.map && !o.maps.includes(f.map)) delete f.map;
+  sv.value = f.vehicle || "";
+  sm.value = f.map || "";
+  $("#fLast").value = f.last || "";
+  $("#fSince").value = f.since || "";
+  $$("#typeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.type === (f.type || "air")));
+}
+
+function bindFilters() {
+  const changed = async (refreshOptions) => {
+    store.set("bb-filters", state.filters);
+    if (refreshOptions) await loadFilterOptions();
+    route();
+  };
+  $$("#typeSeg button").forEach((b) => b.addEventListener("click", () => {
+    state.filters = { ...state.filters, type: b.dataset.type };
+    delete state.filters.vehicle; delete state.filters.map;
+    changed(true);
+  }));
+  $("#fVehicle").addEventListener("change", (e) => { state.filters.vehicle = e.target.value || undefined; changed(); });
+  $("#fMap").addEventListener("change", (e) => { state.filters.map = e.target.value || undefined; changed(); });
+  $("#fLast").addEventListener("change", (e) => { state.filters.last = e.target.value || undefined; changed(); });
+  $("#fSince").addEventListener("change", (e) => { state.filters.since = e.target.value || undefined; changed(); });
+  $("#fReset").addEventListener("click", () => { state.filters = { type: "air" }; changed(true); });
+}
+
+// ---------------------------------------------------------------- building blocks
+let panelIdx = 0;
+function panel(title, body, { cls = "c12", aside = "", flush = false } = {}) {
+  panelIdx += 1;
+  return `<section class="panel ${cls}">
+    <header class="panel-h"><span class="idx">${String(panelIdx).padStart(2, "0")}</span><h2>${esc(title)}</h2>${aside ? `<span class="aside">${aside}</span>` : ""}</header>
+    <div class="panel-b${flush ? " flush" : ""}">${body}</div></section>`;
+}
+
+function kpis(items) {
+  return `<div class="kpis">${items.map((k) => `<div class="kpi${k.hl ? " hl" : ""}">
+    <div class="kpi-label">${esc(k.label)}</div>
+    <div class="kpi-value">${k.value}${k.unit ? `<small>${esc(k.unit)}</small>` : ""}</div>
+    ${k.sub ? `<div class="kpi-sub">${k.sub}</div>` : ""}</div>`).join("")}</div>`;
+}
+
+function barList(items, { cls = "", fmt = (it, total) => `<b>${it.n}</b> · ${pct(it.n, total)}`, max } = {}) {
+  if (!items.length) return '<div class="dim">Veri yok.</div>';
+  const total = items.reduce((a, b) => a + b.n, 0);
+  const top = max ?? Math.max(...items.map((i) => i.n));
+  return `<div class="bars">${items.map((it) => `
+    <div class="lab" title="${esc(it.name)}">${esc(it.name)}</div>
+    <div class="track"><div class="fill ${it.cls || cls}" style="width:${top ? (100 * it.n) / top : 0}%"></div></div>
+    <div class="val">${fmt(it, total)}</div>`).join("")}</div>`;
+}
+
+function empty(title, text) {
+  return `<div class="empty"><strong>${esc(title)}</strong>${text}</div>`;
+}
+
+// vertical bar chart (svg)
+function columnChart(data, { h = 170, cls = "", valueFmt = (v) => v, labelEvery = 1 } = {}) {
+  const W = 600, pad = { l: 28, r: 6, t: 10, b: 24 };
+  const max = Math.max(1, ...data.map((d) => d.v));
+  const iw = W - pad.l - pad.r, ih = h - pad.t - pad.b;
+  const bw = iw / data.length;
+  const ticks = niceTicks(max, 4);
+  let s = `<svg class="chart" viewBox="0 0 ${W} ${h}" role="img">`;
+  for (const t of ticks) {
+    const y = pad.t + ih - (ih * t) / ticks[ticks.length - 1];
+    s += `<line class="grid-line" x1="${pad.l}" x2="${W - pad.r}" y1="${y}" y2="${y}"/><text x="${pad.l - 6}" y="${y + 3}" text-anchor="end">${t}</text>`;
+  }
+  const top = ticks[ticks.length - 1];
+  data.forEach((d, i) => {
+    const bh = (ih * d.v) / top;
+    const x = pad.l + i * bw + bw * 0.18;
+    s += `<rect class="bar ${d.cls || cls}" x="${x}" y="${pad.t + ih - bh}" width="${bw * 0.64}" height="${Math.max(bh, d.v ? 1 : 0)}" data-tip="${esc(d.tip || `${d.label}: ${valueFmt(d.v)}`)}"/>`;
+    if (i % labelEvery === 0) s += `<text x="${pad.l + i * bw + bw / 2}" y="${h - 8}" text-anchor="middle">${esc(d.label)}</text>`;
+  });
+  s += `<line class="axis" x1="${pad.l}" x2="${W - pad.r}" y1="${pad.t + ih}" y2="${pad.t + ih}"/></svg>`;
+  return s;
+}
+
+function niceTicks(max, n) {
+  const raw = max / n;
+  const mag = 10 ** Math.floor(Math.log10(raw || 1));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) || mag;
+  const out = [];
+  for (let v = 0; v <= max + step * 0.999; v += step) out.push(Math.round(v * 100) / 100);
+  return out.length > 1 ? out : [0, 1];
+}
+
+function formStrip(form) {
+  if (!form.length) return "";
+  const bars = form.map((b) => {
+    const lp = b.lobby == null ? 0.5 : b.lobby;
+    const h = 12 + 52 * (1 - lp);
+    const cls = b.result === "win" ? "win" : b.result === "loss" ? "loss" : "";
+    const t = `${day(b.started)} · ${b.result === "win" ? "zafer" : b.result === "loss" ? "yenilgi" : "sonuç ?"}<br>K ${b.kills ?? "–"} / Ö ${b.deaths ?? "–"} · skor ${b.score ?? "–"}<br>lobi dilimi %${Math.round(100 * lp)}`;
+    return `<a href="#/mac/${b.session_id}" class="${cls}" style="height:${h}px" data-tip="${esc(t)}"></a>`;
+  }).join("");
+  return `<div class="form-strip">${bars}</div>
+    <div class="form-legend"><span>Yükseklik = lobideki sıralaman (uzun = üst sıralar)</span>
+    <span><i class="sw" style="background:var(--win)"></i>Zafer</span><span><i class="sw" style="background:var(--loss)"></i>Yenilgi</span>
+    <span><i class="sw" style="background:var(--neutral)"></i>Sonuç metni yok</span></div>`;
+}
+
+function compareTable(lob) {
+  const rows = [["Sen", lob.me, "me"], ["Lobi ortalaması", lob.lobby, ""], ["Her maçın ilk 3'ü", lob.top3, ""]];
+  const metrics = [
+    ["Ort. skor", (r) => r.score, (v) => num(v)],
+    ["K/D", (r) => (r.k == null ? null : r.d ? r.k / r.d : r.k), (v) => num(v, 2)],
+    ["Füzeden kaçış / maç", (r) => r.ev, (v) => num(v, 2)],
+    ["Asist / maç", (r) => r.a, (v) => num(v, 2)],
+  ];
+  let s = `<table class="compare"><thead><tr><th></th>${metrics.map((m) => `<th>${m[0]}</th>`).join("")}</tr></thead><tbody>`;
+  for (const [label, r, cls] of rows) {
+    s += `<tr class="${cls}"><td class="who">${label}</td>`;
+    for (const [, get, f] of metrics) {
+      const max = Math.max(...rows.map((x) => get(x[1]) || 0)) || 1;
+      const v = get(r);
+      s += `<td><div class="cbar"><div class="track"><div class="fill" style="width:${(100 * (v || 0)) / max}%"></div></div><span class="v">${f(v)}</span></div></td>`;
+    }
+    s += "</tr>";
+  }
+  return s + "</tbody></table>";
+}
+
+// sortable table
+function dataTable(cols, rows, { key, onRow, sortKey, desc = true, id = "t" } = {}) {
+  const sorted = sortKey ? [...rows].sort((a, b) => cmp(a[sortKey], b[sortKey]) * (desc ? -1 : 1)) : rows;
+  const head = cols.map((c) => `<th class="${c.n ? "n " : ""}${c.sort !== false ? "sortable " : ""}${sortKey === c.k ? "sorted" + (desc ? "" : " asc") : ""}" data-k="${c.k}">${esc(c.h)}</th>`).join("");
+  const body = sorted.map((r) => `<tr class="${onRow ? "link " : ""}${r._cls || ""}" ${key ? `data-key="${esc(r[key])}"` : ""}>${cols.map((c) => `<td class="${c.n ? "n " : ""}${c.cls || ""}">${c.f ? c.f(r) : esc(r[c.k] ?? "–")}</td>`).join("")}</tr>`).join("");
+  return `<div class="tbl-wrap"><table class="data" data-table="${id}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+const cmp = (a, b) => (a == null && b == null ? 0 : a == null ? -1 : b == null ? 1 : typeof a === "string" ? a.localeCompare(b, "tr") : a - b);
+
+function mountTable(container, cols, rows, opts) {
+  const st = { sortKey: opts.sortKey, desc: opts.desc ?? true };
+  const draw = () => {
+    container.innerHTML = dataTable(cols, rows, { ...opts, ...st });
+    $$("th.sortable", container).forEach((th) => th.addEventListener("click", () => {
+      const k = th.dataset.k;
+      st.desc = st.sortKey === k ? !st.desc : true;
+      st.sortKey = k;
+      draw();
+    }));
+    if (opts.onRow) $$("tbody tr", container).forEach((tr) => tr.addEventListener("click", () => opts.onRow(tr.dataset.key)));
+  };
+  draw();
+}
+
+// ---------------------------------------------------------------- pages
+async function pageSummary(view) {
+  const s = await api("summary", state.filters);
+  const t = s.totals;
+  const known = (t.w || 0) + (t.l || 0);
+  $("#fCount").textContent = `${t.n} maç`;
+  if (!t.n) {
+    view.innerHTML = `<div class="grid">${panel("Veri yok", empty("Bu filtreyle maç bulunamadı.", "Filtreleri sıfırla ya da sağ üstten <b>İçe aktar</b>'a bas."))}</div>`;
+    return;
+  }
+  const lobbyPct = t.lobby == null ? "–" : `%${Math.round(100 * t.lobby)}`;
+  const tel = s.telemetry;
+  view.innerHTML = `
+  <div class="page-title"><h1>Özet</h1><span class="meta">${t.n} maç · ${t.nres || 0} sonuç metni · ${tel.n || 0} telemetrili uçuş</span></div>
+  <div class="grid">
+    <section class="panel c12">${kpis([
+      { label: "Maç", value: num(t.n), sub: `${t.w || 0} Z · ${t.l || 0} Y · ${t.n - known} ?` },
+      { label: "Kazanma oranı", value: known ? Math.round((100 * t.w) / known) : "–", unit: known ? "%" : "", sub: `${known} sonucu bilinen maçta` },
+      { label: "K/D", value: ratio(t.k || 0, t.d), sub: `${t.k || 0} kill · ${t.d || 0} ölüm`, hl: true },
+      { label: "Ortalama skor", value: num(t.score), sub: `asist ${t.a || 0}` },
+      { label: "Lobi dilimi", value: lobbyPct, sub: "0 = lobinin en iyisi" },
+      { label: "Füzeden kaçış", value: num((t.ev || 0) / t.n, 1), unit: "/maç", sub: `toplam ${t.ev || 0}` },
+      { label: "SL / maç", value: num(t.sl), sub: t.nres ? `${t.nres} maçtan` : "sonuç metni yok" },
+      { label: "RP / maç", value: num(t.rp), sub: t.nres ? `${t.nres} maçtan` : "sonuç metni yok" },
+    ])}</section>
+    ${panel("Son maçlar", formStrip(s.form), { cls: "c12", aside: `son ${s.form.length}`, flush: true })}
+    ${panel("Lobiyle kıyas", compareTable(s.lobby) + '<p class="note">Aynı maçlardaki diğer 31 oyuncuya göre. Lobi ortalaması iki takımı da kapsar.</p>', { cls: "c7" })}
+    ${panel("Ne zaman ölüyorsun", columnChart(s.death_timing.map((d) => ({ label: d.label, v: d.n, tip: `${d.label}. dakika: ${d.n} ölüm` })), { cls: "acc" }) + '<p class="note">Maç başından itibaren dakika. Replay verisinden.</p>', { cls: "c5" })}
+    ${panel("Seni düşüren silahlar", barList(s.death_weapons, { cls: "loss" }), { cls: "c6", aside: '<a href="#/silahlar">tümü →</a>' })}
+    ${panel("Kill aldığın silahlar", barList(s.kill_weapons, { cls: "acc" }), { cls: "c6", aside: "oyuncular + AI hedefler" })}
+    ${tel.n ? panel("Uçuş verisi", kpis([
+      { label: "Ort. irtifa", value: num(tel.alt), unit: " m" },
+      { label: "Ort. hız", value: num(tel.tas), unit: " km/h" },
+      { label: "Ort. maks G", value: num(tel.max_g, 1) },
+      { label: "300 m altı", value: num((tel.low || 0) * 100), unit: "%" },
+      { label: "İsabet anı irtifa", value: num(tel.death_alt), unit: " m" },
+      { label: "En yakın düşman", value: num(tel.death_enemy_km, 1), unit: " km", sub: "ilk isabet anında, minimapte" },
+    ]), { cls: "c12", aside: `${tel.n} telemetrili yaşam`, flush: true }) : ""}
+    ${panel("Son 10 maç", '<div id="recentT"></div>', { cls: "c12", flush: true, aside: '<a href="#/maclar">tümü →</a>' })}
+  </div>`;
+  mountTable($("#recentT", view), battleCols(), s.recent, { key: "session_id", onRow: (k) => (location.hash = `#/mac/${k}`) });
+}
+
+function battleCols() {
+  return [
+    { h: "Tarih", k: "started", f: (r) => `<span class="num">${dt(r.started)}</span>` },
+    { h: "Harita", k: "map" },
+    { h: "Araç", k: "vehicle_name" },
+    { h: "Sonuç", k: "result", f: (r) => resultTag(r.result) },
+    { h: "K", k: "kills", n: true, f: (r) => r.kills ?? "–" },
+    { h: "Ö", k: "deaths", n: true, f: (r) => r.deaths ?? "–" },
+    { h: "Skor", k: "score", n: true, f: (r) => num(r.score) },
+    { h: "Lobi", k: "lobby_pos", n: true, f: (r) => (r.lobby_pos ? `${r.lobby_pos}<span class="dim">/${r.n_players}</span>` : "–") },
+    { h: "Kaçış", k: "missile_evades", n: true, f: (r) => r.missile_evades ?? "–" },
+    { h: "SL", k: "total_sl", n: true, f: (r) => num(r.total_sl) },
+    { h: "RP", k: "total_rp", n: true, f: (r) => num(r.total_rp) },
+    { h: "Veri", k: "has_replay", sort: false, f: (r) => `<span class="src">${r.has_replay ? "<b>R</b>" : "·"}${r.has_result ? "<b>S</b>" : "·"}${r.has_telemetry ? "<b>T</b>" : "·"}</span>` },
+  ];
+}
+
+async function pageBattles(view) {
+  const rows = await api("battles", state.filters);
+  $("#fCount").textContent = `${rows.length} maç`;
+  view.innerHTML = `<div class="page-title"><h1>Maçlar</h1><span class="meta">${rows.length} maç · satıra tıkla: detay · Veri: <b>R</b> replay, <b>S</b> sonuç metni, <b>T</b> telemetri</span></div>
+    <div class="grid">${panel("Maç listesi", '<div id="bt"></div>', { flush: true })}</div>`;
+  mountTable($("#bt", view), battleCols(), rows, { key: "session_id", onRow: (k) => (location.hash = `#/mac/${k}`), sortKey: "started" });
+}
+
+async function pageWeapons(view) {
+  const w = await api("weapons", state.filters);
+  const nk = w.kills.reduce((a, b) => a + b.n, 0), nd = w.deaths.reduce((a, b) => a + b.n, 0);
+  $("#fCount").textContent = `${nk} kill · ${nd} ölüm`;
+  view.innerHTML = `<div class="page-title"><h1>Silahlar</h1><span class="meta">Replay kill raporlarından · ${nk} kill · ${nd} ölüm</span></div>
+  <div class="grid">
+    ${panel("Seni düşüren silahlar", barList(w.deaths, { cls: "loss" }), { cls: "c6", aside: `${nd} ölüm` })}
+    ${panel("Kill aldığın silahlar", barList(w.kills, { cls: "acc" }), { cls: "c6", aside: `${nk} kill · AI dahil` })}
+    ${panel("Seni düşüren araçlar", barList(w.killers, { cls: "loss" }), { cls: "c6" })}
+    ${panel("Düşürdüğün araçlar", barList(w.victims, { cls: "acc" }), { cls: "c6" })}
+    ${w.intercepts.length ? panel("Vurduğun füzeler", barList(w.intercepts), { cls: "c6", aside: "mühimmat etkisizleştirme" }) : ""}
+  </div>`;
+}
+
+function rateBar(v, max = 1, cls = "") {
+  return v == null ? "–" : `<span class="num">${num(v, 2)}</span><span class="inline-bar ${cls}" style="width:${Math.min(60, (60 * v) / (max || 1))}px"></span>`;
+}
+
+async function pageMaps(view) {
+  const rows = await api("maps", state.filters);
+  $("#fCount").textContent = `${rows.length} harita`;
+  const maxKd = Math.max(...rows.map((r) => (r.d ? r.k / r.d : r.k || 0)), 0.01);
+  rows.forEach((r) => { r.kd = r.k == null ? null : r.d ? r.k / r.d : r.k; r.wr = (r.w || 0) + (r.l || 0) ? r.w / (r.w + r.l) : null; r.top = r.lobby == null ? null : 1 - r.lobby; });
+  view.innerHTML = `<div class="page-title"><h1>Haritalar</h1><span class="meta">Hangi haritada iyisin, hangisinde zorlanıyorsun</span></div>
+    <div class="grid">${panel("Harita performansı", '<div id="mt"></div>', { flush: true, aside: "başlığa tıkla: sırala" })}</div>
+    <p class="note">Lobi dilimi: maçın kaçta kaçındasın (0 = en iyi). Kazanma oranı yalnızca sonuç metni olan maçlardan.</p>`;
+  mountTable($("#mt", view), [
+    { h: "Harita", k: "map" },
+    { h: "Maç", k: "n", n: true },
+    { h: "Kazanma", k: "wr", n: true, f: (r) => (r.wr == null ? '<span class="dim">–</span>' : `%${Math.round(100 * r.wr)} <span class="dim">(${r.w}/${r.w + r.l})</span>`) },
+    { h: "Kill", k: "k", n: true },
+    { h: "Ölüm", k: "d", n: true },
+    { h: "K/D", k: "kd", n: true, f: (r) => rateBar(r.kd, maxKd, "acc") },
+    { h: "Ort. skor", k: "score", n: true, f: (r) => num(r.score) },
+    { h: "Lobi dilimi", k: "top", n: true, f: (r) => (r.lobby == null ? "–" : `%${Math.round(100 * r.lobby)}`) },
+    { h: "Kaçış", k: "ev", n: true },
+  ], rows, { sortKey: "n" });
+}
+
+async function pageVehicles(view) {
+  const rows = await api("vehicles", state.filters);
+  $("#fCount").textContent = `${rows.length} araç`;
+  const maxKd = Math.max(...rows.map((r) => (r.d ? r.k / r.d : r.k || 0)), 0.01);
+  rows.forEach((r) => { r.kd = r.d ? r.k / r.d : r.k; r.wr = (r.w || 0) + (r.l || 0) ? r.w / (r.w + r.l) : null; });
+  view.innerHTML = `<div class="page-title"><h1>Araçlar</h1></div>
+    <div class="grid">${panel("Araç performansı", '<div id="vt"></div>', { flush: true })}</div>`;
+  mountTable($("#vt", view), [
+    { h: "Araç", k: "vehicle_name" },
+    { h: "Tür", k: "vehicle_type", cls: "dim" },
+    { h: "Maç", k: "n", n: true },
+    { h: "Kazanma", k: "wr", n: true, f: (r) => (r.wr == null ? '<span class="dim">–</span>' : `%${Math.round(100 * r.wr)}`) },
+    { h: "Kill", k: "k", n: true }, { h: "Ölüm", k: "d", n: true },
+    { h: "K/D", k: "kd", n: true, f: (r) => rateBar(r.kd, maxKd, "acc") },
+    { h: "Ort. skor", k: "score", n: true, f: (r) => num(r.score) },
+    { h: "Lobi dilimi", k: "lobby", n: true, f: (r) => (r.lobby == null ? "–" : `%${Math.round(100 * r.lobby)}`) },
+    { h: "SL/maç", k: "sl", n: true, f: (r) => num(r.sl) },
+    { h: "RP/maç", k: "rp", n: true, f: (r) => num(r.rp) },
+  ], rows, { sortKey: "n", key: "vehicle", onRow: (k) => { state.filters.vehicle = k; store.set("bb-filters", state.filters); $("#fVehicle").value = k; location.hash = "#/ozet"; } });
+}
+
+async function pageGrind(view) {
+  const g = await api("grind", state.filters);
+  const t = g.totals;
+  $("#fCount").textContent = `${t.n} sonuç metni`;
+  if (!t.n) {
+    view.innerHTML = `<div class="page-title"><h1>Grind</h1></div><div class="grid">${panel("Sonuç metni yok", empty("Henüz SL/RP verisi yok.", "Recorder açıkken hangardaki savaş sonucu bildiriminde <b>kopyala</b>'ya bas; metin otomatik kaydedilir. Sonra <b>İçe aktar</b>."))}</div>`;
+    return;
+  }
+  const mins = (t.played || 0) / 60;
+  view.innerHTML = `<div class="page-title"><h1>Grind</h1><span class="meta">${t.n} maçın savaş sonucu metninden · toplam ${num(t.sum_sl)} SL, ${num(t.sum_rp)} RP</span></div>
+  <div class="grid">
+    <section class="panel c12">${kpis([
+      { label: "Net SL / maç", value: num(t.sl), hl: true, sub: `tamir ort. ${num(t.repair)}` },
+      { label: "RP / maç", value: num(t.rp) },
+      { label: "SL / dakika", value: mins ? num(t.sum_sl / mins) : "–", sub: "oynanan süreye göre" },
+      { label: "RP / dakika", value: mins ? num(t.sum_rp / mins) : "–" },
+      { label: "Zaferde", value: num(t.win_sl), unit: " SL", sub: `${num(t.win_rp)} RP` },
+      { label: "Yenilgide", value: num(t.loss_sl), unit: " SL", sub: `${num(t.loss_rp)} RP` },
+      { label: "Ort. aktivite", value: num(t.activity), unit: "%" },
+    ])}</section>
+    ${panel("Maç başı kazanç", grindChart(g.battles), { cls: "c12", aside: "net SL ve RP" })}
+    ${panel("Araca göre", '<div id="gv"></div>', { cls: "c12", flush: true })}
+  </div>`;
+  mountTable($("#gv", view), [
+    { h: "Araç", k: "vehicle_name" }, { h: "Maç", k: "n", n: true },
+    { h: "SL/maç", k: "sl", n: true, f: (r) => num(r.sl) }, { h: "RP/maç", k: "rp", n: true, f: (r) => num(r.rp) },
+    { h: "Tamir/maç", k: "repair", n: true, f: (r) => num(r.repair) },
+    { h: "SL/dk", k: "sum_sl", n: true, f: (r) => (r.played ? num(r.sum_sl / (r.played / 60)) : "–") },
+    { h: "RP/dk", k: "sum_rp", n: true, f: (r) => (r.played ? num(r.sum_rp / (r.played / 60)) : "–") },
+  ], g.by_vehicle, { sortKey: "n" });
+}
+
+function grindChart(rows) {
+  const W = 1000, H = 220, pad = { l: 56, r: 56, t: 14, b: 28 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  const maxSl = Math.max(1, ...rows.map((r) => r.total_sl || 0)), maxRp = Math.max(1, ...rows.map((r) => r.total_rp || 0));
+  const tSl = niceTicks(maxSl, 4), tRp = niceTicks(maxRp, 4);
+  const topSl = tSl[tSl.length - 1], topRp = tRp[tRp.length - 1];
+  const gw = iw / rows.length;
+  let s = `<div class="chart-legend"><span><i class="sw" style="background:var(--ink)"></i>Net SL (sol eksen)</span><span><i class="sw" style="background:var(--series-2)"></i>RP (sağ eksen)</span></div><svg class="chart" viewBox="0 0 ${W} ${H}">`;
+  tSl.forEach((v, i) => {
+    const y = pad.t + ih - (ih * v) / topSl;
+    s += `<line class="grid-line" x1="${pad.l}" x2="${W - pad.r}" y1="${y}" y2="${y}"/><text x="${pad.l - 6}" y="${y + 3}" text-anchor="end">${nf.format(v)}</text>`;
+    const rv = tRp[Math.min(i, tRp.length - 1)];
+    if (i < tRp.length) s += `<text x="${W - pad.r + 6}" y="${pad.t + ih - (ih * rv) / topRp + 3}">${nf.format(rv)}</text>`;
+  });
+  rows.forEach((r, i) => {
+    const x = pad.l + i * gw;
+    const bw = Math.min(18, gw * 0.34);
+    const hs = (ih * Math.max(0, r.total_sl || 0)) / topSl, hr = (ih * (r.total_rp || 0)) / topRp;
+    const tipTxt = `${day(r.started)} · ${r.map}<br>${r.vehicle_name || ""} · ${r.result === "win" ? "zafer" : "yenilgi"}<br>${num(r.total_sl)} SL net · ${num(r.total_rp)} RP`;
+    s += `<g data-tip="${esc(tipTxt)}" style="cursor:pointer" onclick="location.hash='#/mac/${r.session_id}'"><rect x="${x}" y="${pad.t}" width="${gw}" height="${ih}" fill="transparent"/>
+      <rect class="bar" x="${x + gw / 2 - bw - 1}" y="${pad.t + ih - hs}" width="${bw}" height="${hs}"/>
+      <rect class="bar s2" x="${x + gw / 2 + 1}" y="${pad.t + ih - hr}" width="${bw}" height="${hr}"/>
+      <rect x="${x + gw / 2 - bw - 1}" y="${pad.t + ih + 4}" width="${bw * 2 + 2}" height="3" fill="var(--${r.result === "win" ? "win" : "loss"})"/></g>`;
+  });
+  s += `<line class="axis" x1="${pad.l}" x2="${W - pad.r}" y1="${pad.t + ih}" y2="${pad.t + ih}"/></svg>`;
+  return s + '<p class="note">Çubuğun altındaki şerit: yeşil zafer, kırmızı yenilgi. Tıkla: maç detayı.</p>';
+}
+
+// ---------------------------------------------------------------- battle detail
+async function pageBattle(view, sid) {
+  const d = await api(`battle/${encodeURIComponent(sid)}`);
+  const b = d.battle;
+  const me = d.players.find((p) => p.is_me);
+  const myTeam = me ? me.team : null;
+  const mine = d.kills.filter((k) => k.me_killer || k.me_victim);
+  $("#fCount").textContent = "";
+  const end = (b.end_s || Math.max(0, ...d.kills.map((k) => k.ms / 1000))) || 1;
+
+  const evList = mine.length ? `<ul class="events">${mine.map((k) => {
+    if (k.me_killer && k.destroyed_weapon) return `<li><span class="t">${mmss(k.ms / 1000)}</span><span class="k icpt">◇</span><span>${esc(k.destroyed_name)} füzesini vurdun <span class="w">${esc(k.weapon_name || "?")}</span></span></li>`;
+    if (k.me_killer) return `<li><span class="t">${mmss(k.ms / 1000)}</span><span class="k kill">▲</span><span><b>${esc(k.victim_name || "AI hedef")}</b> <span class="dim">${esc(k.victim_vehicle_name || "")}</span> <span class="w">${esc(k.weapon_name || "silahsız")}</span></span></li>`;
+    return `<li><span class="t">${mmss(k.ms / 1000)}</span><span class="k death">✕</span><span>Düşürüldün: <b>${esc(k.killer_name || "kaza")}</b> <span class="dim">${esc(k.killer_vehicle_name || "")}</span> <span class="w">${esc(k.weapon_name || "silahsız")}</span></span></li>`;
+  }).join("")}</ul>` : '<div class="dim">Bu maçta senin kill veya ölüm kaydın yok.</div>';
+
+  const teamTables = [myTeam, myTeam === 1 ? 2 : 1].filter((t) => t != null).map((team) => {
+    const ps = d.players.filter((p) => p.team === team).map((p) => ({ ...p, _cls: p.is_me ? "me" : "" }));
+    const label = team === myTeam ? "Senin takımın" : "Rakip takım";
+    const color = team === myTeam ? "var(--win)" : "var(--loss)";
+    return `<div class="c6 panel"><div class="team-h"><span class="bar" style="background:${color}"></span>${label}<span class="dim" style="margin-left:auto">${ps.reduce((a, p) => a + (p.kills || 0), 0)} kill</span></div>
+      ${dataTable([
+        { h: "Oyuncu", k: "name", f: (p) => `${esc(p.name)} <span class="dim">${esc(p.clan || "")}</span>` },
+        { h: "Araç", k: "vehicle_name", cls: "muted" },
+        { h: "K", k: "kills", n: true }, { h: "Ö", k: "deaths", n: true }, { h: "A", k: "assists", n: true },
+        { h: "Skor", k: "score", n: true }, { h: "Kaçış", k: "missile_evades", n: true },
+      ], ps, { sortKey: null })}</div>`;
+  }).join("");
+
+  const rewards = () => {
+    if (!d.result) return "";
+    const cats = Object.entries(d.result.categories || {});
+    return panel("Ödüller", `<table class="rewards"><tbody>${cats.map(([k, v]) => `<tr><td>${esc(k)}${v.count ? ` <span class="dim">×${v.count}</span>` : ""}</td><td class="n">${v.sl != null ? num(v.sl) + " SL" : ""}</td><td class="n">${v.rp != null ? num(v.rp) + " RP" : ""}</td></tr>`).join("")}
+      <tr><td>Otomatik tamir</td><td class="n">${num(d.result.repair_sl)} SL</td><td></td></tr>
+      <tr class="total"><td>Toplam (net)</td><td class="n">${num(d.result.total_sl)} SL</td><td class="n">${num(d.result.total_rp)} RP</td></tr></tbody></table>
+      <p class="note">Aktivite %${d.result.activity ?? "–"} · oynanan ${mmss(d.result.played_s)} · araştırma: ${esc(d.result.research_vehicle || "–")}</p>`, { cls: "c5" });
+  };
+
+  view.innerHTML = `
+  <a class="back" href="#/maclar">← Maçlar</a>
+  <div class="detail-head"><div>
+    <h1>${esc(b.map || "?")}</h1>
+    <div class="meta">${resultTag(b.result)}<span>${esc(b.mode || b.battle_class || "")}</span><span class="num">${dt(b.started)}</span><span>${esc(b.vehicle_name || "")}</span><span class="num">${mmss(end)}</span><span class="src">oturum ${esc(b.session_id)}</span></div>
+  </div></div>
+  <div class="grid">
+    <section class="panel c12">${kpis([
+      { label: "Kill", value: b.kills ?? "–", hl: true }, { label: "Ölüm", value: b.deaths ?? "–" }, { label: "Asist", value: b.assists ?? "–" },
+      { label: "Skor", value: num(b.score) }, { label: "Lobi sırası", value: b.lobby_pos ?? "–", unit: b.n_players ? `/${b.n_players}` : "" },
+      { label: "Takım sırası", value: b.team_pos ?? "–" }, { label: "Füzeden kaçış", value: b.missile_evades ?? "–" },
+      { label: "Net SL", value: num(b.total_sl) }, { label: "RP", value: num(b.total_rp) },
+    ])}</section>
+    ${panel("Maç akışı", timeline(d.kills, end, myTeam, d.players), { cls: "c12", aside: "tüm lobideki kill'ler" })}
+    ${panel("Seninle ilgili olaylar", evList, { cls: d.result ? "c7" : "c12" })}
+    ${rewards()}
+    <div class="c12" id="flight"></div>
+    ${teamTables}
+  </div>`;
+
+  if (b.match_id) view._afterMount = () => loadFlight(b.match_id);
+}
+
+function timeline(kills, end, myTeam, players) {
+  const W = 1000, H = 150, pad = { l: 92, r: 14, t: 12, b: 26 };
+  const iw = W - pad.l - pad.r;
+  const x = (ms) => pad.l + (iw * Math.min(ms / 1000, end)) / end;
+  const lanes = { me: 30, own: 70, enemy: 104 };
+  const teamOf = (idx) => players.find((p) => p.idx === idx)?.team;
+  let s = `<svg class="chart" viewBox="0 0 ${W} ${H}">`;
+  for (let m = 0; m <= end / 60; m++) {
+    const xx = pad.l + (iw * m * 60) / end;
+    s += `<line class="grid-line" x1="${xx}" x2="${xx}" y1="${pad.t}" y2="${H - pad.b}"/><text x="${xx}" y="${H - 8}" text-anchor="middle">${m}:00</text>`;
+  }
+  for (const [k, y] of Object.entries(lanes)) {
+    s += `<line class="axis" x1="${pad.l}" x2="${W - pad.r}" y1="${y}" y2="${y}" style="stroke:var(--rule)"/>`;
+    s += `<text class="lane-label" x="0" y="${y + 4}">${{ me: "Sen", own: "Takımın", enemy: "Rakip" }[k]}</text>`;
+  }
+  for (const k of kills) {
+    const xx = x(k.ms);
+    const who = `${mmss(k.ms / 1000)} · ${esc(k.killer_name || "kaza")} (${esc(k.killer_vehicle_name || "?")})${k.destroyed_weapon ? ` → ${esc(k.destroyed_name)} füzesi` : ` → ${esc(k.victim_name || "AI")} (${esc(k.victim_vehicle_name || "?")})`}<br>${esc(k.weapon_name || "silahsız")}`;
+    if (k.me_killer) {
+      s += `<path class="mk-kill" d="M${xx} ${lanes.me - 8} L${xx + 6} ${lanes.me + 4} L${xx - 6} ${lanes.me + 4}Z" data-tip="${who}"/>`;
+    } else if (k.me_victim) {
+      s += `<g data-tip="${who}"><rect x="${xx - 8}" y="${lanes.me - 8}" width="16" height="16" fill="transparent"/><path class="mk-death" d="M${xx - 6} ${lanes.me - 6} L${xx + 6} ${lanes.me + 6} M${xx + 6} ${lanes.me - 6} L${xx - 6} ${lanes.me + 6}"/></g>`;
+    }
+    if (k.killer_idx == null && !k.me_victim) continue;
+    const team = k.killer_idx != null ? teamOf(k.killer_idx) : null;
+    if (team == null || k.me_killer) continue;
+    const y = team === myTeam ? lanes.own : lanes.enemy;
+    s += `<g data-tip="${who}"><rect x="${xx - 4}" y="${y - 10}" width="8" height="20" fill="transparent"/><line class="${team === myTeam ? "tick-own" : "tick-enemy"}" x1="${xx}" x2="${xx}" y1="${y - 8}" y2="${y + 8}"/></g>`;
+  }
+  return s + "</svg>";
+}
+
+async function loadFlight(matchId) {
+  const box = $("#flight");
+  box.innerHTML = '<div class="loading">Uçuş verisi yükleniyor</div>';
+  let t;
+  try { t = await api(`telemetry/${encodeURIComponent(matchId)}`); } catch { box.innerHTML = ""; return; }
+  if (!t.series.length) { box.innerHTML = ""; return; }
+  const life = t.lives[0] || {};
+  box.className = "c12 grid";
+  box.style.gap = "var(--gap)";
+  panelIdx = $$(".panel-h .idx").length;
+  box.innerHTML = `${panel("Uçuş profili", `<div class="chart-legend"><span><i class="sw" style="background:var(--accent-soft);outline:1px solid var(--accent)"></i>İrtifa (m, sol)</span><span><i class="sw" style="background:var(--ink)"></i>Gerçek hava hızı (km/h, sağ)</span><span><i class="sw" style="background:var(--accent)"></i>Kill</span><span><i class="sw" style="background:var(--loss)"></i>Hasar / ölüm</span></div>${flightChart(t)}<div class="readout" id="readout">Grafiğin üzerinde gezin.</div>`, { cls: "c8", aside: "8111 telemetrisi" })}
+    ${panel("Rota", trackChart(t), { cls: "c4", aside: life.distance_km ? `${num(life.distance_km)} km` : "" })}`;
+  bindFlightHover(t);
+}
+
+function flightChart(t) {
+  const W = 1000, H = 260, pad = { l: 50, r: 54, t: 10, b: 24 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  const s0 = t.series;
+  const t0 = s0[0][0], t1 = s0[s0.length - 1][0];
+  const maxH = niceTicks(Math.max(...s0.map((r) => r[1] || 0)), 4), maxV = niceTicks(Math.max(...s0.map((r) => r[2] || 0)), 4);
+  const topH = maxH[maxH.length - 1], topV = maxV[maxV.length - 1];
+  const X = (tt) => pad.l + (iw * (tt - t0)) / Math.max(1, t1 - t0);
+  const YH = (h) => pad.t + ih - (ih * (h || 0)) / topH, YV = (v) => pad.t + ih - (ih * (v || 0)) / topV;
+  let s = `<svg class="chart" id="flightSvg" viewBox="0 0 ${W} ${H}" data-tip-live>`;
+  maxH.forEach((v) => { s += `<line class="grid-line" x1="${pad.l}" x2="${W - pad.r}" y1="${YH(v)}" y2="${YH(v)}"/><text x="${pad.l - 6}" y="${YH(v) + 3}" text-anchor="end">${nf.format(v)}</text>`; });
+  maxV.forEach((v) => { s += `<text x="${W - pad.r + 6}" y="${YV(v) + 3}">${nf.format(v)}</text>`; });
+  for (let m = Math.ceil(t0 / 60); m <= t1 / 60; m++) s += `<text x="${X(m * 60)}" y="${H - 6}" text-anchor="middle">${m}:00</text>`;
+  const area = `M${X(t0)} ${YH(0)} ` + s0.map((r) => `L${X(r[0]).toFixed(1)} ${YH(r[1]).toFixed(1)}`).join(" ") + ` L${X(t1)} ${YH(0)}Z`;
+  const alt = s0.map((r, i) => `${i ? "L" : "M"}${X(r[0]).toFixed(1)} ${YH(r[1]).toFixed(1)}`).join(" ");
+  const spd = s0.map((r, i) => `${i ? "L" : "M"}${X(r[0]).toFixed(1)} ${YV(r[2]).toFixed(1)}`).join(" ");
+  s += `<path class="area" d="${area}"/><path class="line acc" d="${alt}"/><path class="line" d="${spd}"/>`;
+  for (const e of t.events) {
+    if (e.t < t0 || e.t > t1) continue;
+    const xx = X(e.t);
+    if (e.me_actor && (e.kind === "kill" || e.kind === "destroy")) s += `<line x1="${xx}" x2="${xx}" y1="${pad.t}" y2="${pad.t + ih}" stroke="var(--accent)" stroke-width="2"/>`;
+    else if (e.me_target && (e.kind === "kill" || e.kind === "destroy")) s += `<line x1="${xx}" x2="${xx}" y1="${pad.t}" y2="${pad.t + ih}" stroke="var(--loss)" stroke-width="2"/>`;
+    else if (e.me_target) s += `<line x1="${xx}" x2="${xx}" y1="${pad.t}" y2="${pad.t + ih}" stroke="var(--loss)" stroke-width="1" stroke-dasharray="3 3"/>`;
+  }
+  s += `<line class="axis" x1="${pad.l}" x2="${W - pad.r}" y1="${pad.t + ih}" y2="${pad.t + ih}"/>`;
+  s += `<line class="cross" id="crossX" x1="-10" x2="-10" y1="${pad.t}" y2="${pad.t + ih}"/><rect id="hoverRect" x="${pad.l}" y="${pad.t}" width="${iw}" height="${ih}" fill="transparent"/></svg>`;
+  t._geom = { W, pad, iw, t0, t1 };
+  return s;
+}
+
+function bindFlightHover(t) {
+  const svg = $("#flightSvg"), cross = $("#crossX"), out = $("#readout");
+  if (!svg) return;
+  const { W, pad, iw, t0, t1 } = t._geom;
+  svg.addEventListener("mousemove", (e) => {
+    const r = svg.getBoundingClientRect();
+    const vx = ((e.clientX - r.left) / r.width) * W;
+    const tt = t0 + ((vx - pad.l) / iw) * (t1 - t0);
+    if (tt < t0 || tt > t1) return;
+    let best = t.series[0];
+    for (const row of t.series) { if (row[0] > tt) break; best = row; }
+    cross.setAttribute("x1", vx); cross.setAttribute("x2", vx);
+    out.innerHTML = `t <b>${mmss(best[0])}</b> · irtifa <b>${num(best[1])} m</b> · hız <b>${num(best[2])} km/h</b> · Mach <b>${num(best[3], 2)}</b> · G <b>${num(best[4], 1)}</b>`;
+    const dot = $("#trackDot");
+    if (dot && t.track.length) {
+      let p = t.track[0];
+      for (const q of t.track) { if (q[0] > best[0]) break; p = q; }
+      dot.setAttribute("cx", p[1] * 300); dot.setAttribute("cy", p[2] * 300); dot.style.display = "";
+    }
+  });
+}
+
+function trackChart(t) {
+  if (!t.track.length) return '<div class="dim">Konum verisi yok.</div>';
+  const S = 300;
+  const xs = t.track.map((p) => p[1]), ys = t.track.map((p) => p[2]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const span = Math.max(maxX - minX, maxY - minY, 0.05) * 1.25;
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const vb = [cx - span / 2, cy - span / 2, span, span].map((v) => v * S);
+  let s = `<svg class="chart" viewBox="${vb.join(" ")}" style="aspect-ratio:1;overflow:hidden">`;
+  const step = S / 8;
+  const letters = "ABCDEFGH";
+  for (let i = 0; i <= 8; i++) {
+    s += `<line class="grid-line" x1="${i * step}" x2="${i * step}" y1="0" y2="${S}" vector-effect="non-scaling-stroke"/><line class="grid-line" y1="${i * step}" y2="${i * step}" x1="0" x2="${S}" vector-effect="non-scaling-stroke"/>`;
+  }
+  const fs = span * S * 0.035;
+  for (let i = 0; i < 8; i++) {
+    s += `<text class="grid-label" x="${i * step + step / 2}" y="${vb[1] + fs * 1.2}" text-anchor="middle" style="font-size:${fs}px">${i + 1}</text>`;
+    s += `<text class="grid-label" x="${vb[0] + fs * 0.4}" y="${i * step + step / 2}" style="font-size:${fs}px">${letters[i]}</text>`;
+  }
+  const d = t.track.map((p, i) => `${i ? "L" : "M"}${(p[1] * S).toFixed(2)} ${(p[2] * S).toFixed(2)}`).join(" ");
+  const sw = span * S * 0.006;
+  const last = t.track[t.track.length - 1], first = t.track[0];
+  s += `<path class="track-path" d="${d}" style="stroke-width:${sw}"/>`;
+  s += `<circle class="track-start" cx="${first[1] * S}" cy="${first[2] * S}" r="${sw * 2.2}" style="stroke-width:${sw}"/>`;
+  s += `<path d="M${last[1] * S - sw * 2.5} ${last[2] * S - sw * 2.5} L${last[1] * S + sw * 2.5} ${last[2] * S + sw * 2.5} M${last[1] * S + sw * 2.5} ${last[2] * S - sw * 2.5} L${last[1] * S - sw * 2.5} ${last[2] * S + sw * 2.5}" stroke="var(--loss)" stroke-width="${sw * 1.4}"/>`;
+  s += `<circle id="trackDot" r="${sw * 2.2}" fill="var(--accent)" style="display:none"/></svg>`;
+  return s + '<p class="note">○ başlangıç · ✕ son konum · harita ızgarası oyundaki kare koordinatları</p>';
+}
+
+// ---------------------------------------------------------------- import
+async function runImport() {
+  const btn = $("#importBtn");
+  btn.disabled = true;
+  btn.textContent = "Aktarılıyor…";
+  try {
+    await fetch("/api/import", { method: "POST" });
+    let st;
+    do {
+      await new Promise((r) => setTimeout(r, 700));
+      st = await api("import");
+      const lastLine = st.log[st.log.length - 1];
+      if (lastLine) btn.textContent = lastLine.trim().slice(0, 28) + "…";
+    } while (st.running);
+    if (st.error) toast(`Hata: ${st.error}`);
+    else if (st.last) toast(`Telemetri ${st.last.telemetry} · replay ${st.last.replays} · sonuç ${st.last.results} yeni. Toplam ${st.last.battles} maç.`);
+    await loadFilterOptions();
+    route();
+  } catch (e) {
+    toast(`Hata: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "İçe aktar";
+  }
+}
+
+function toast(msg) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 5000);
+}
+
+// ---------------------------------------------------------------- router
+const routes = { ozet: pageSummary, maclar: pageBattles, silahlar: pageWeapons, haritalar: pageMaps, araclar: pageVehicles, grind: pageGrind };
+let routeSeq = 0;
+async function route() {
+  const seq = ++routeSeq;
+  const parts = location.hash.replace(/^#\/?/, "").split("/");
+  const page = parts[0] || "ozet";
+  const arg = parts[1];
+  $$("#tabs a").forEach((a) => a.classList.toggle("on", a.dataset.tab === page || (page === "mac" && a.dataset.tab === "maclar")));
+  $("#filterbar").style.display = page === "mac" ? "none" : "";
+  const view = $("#view");
+  view.innerHTML = '<div class="loading">Yükleniyor</div>';
+  panelIdx = 0;
+  try {
+    const tmp = document.createElement("div");
+    if (page === "mac") await pageBattle(tmp, decodeURIComponent(arg || ""));
+    else await (routes[page] || pageSummary)(tmp);
+    if (seq !== routeSeq) return;
+    view.replaceChildren(...tmp.childNodes);
+    if (tmp._afterMount) tmp._afterMount();
+  } catch (e) {
+    if (seq !== routeSeq) return;
+    view.innerHTML = `<div class="grid">${panel("Hata", empty("Veri yüklenemedi.", esc(e.message)))}</div>`;
+  }
+  window.scrollTo(0, 0);
+}
+
+// ---------------------------------------------------------------- boot
+(async function boot() {
+  setTheme(document.documentElement.dataset.theme || "paper");
+  $$(".themes button").forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.themeSet)));
+  $("#importBtn").addEventListener("click", runImport);
+  bindFilters();
+  try { state.player = (await api("me")).player; $("#pilot").textContent = state.player; } catch { /* ignore */ }
+  await loadFilterOptions();
+  addEventListener("hashchange", route);
+  route();
+})();

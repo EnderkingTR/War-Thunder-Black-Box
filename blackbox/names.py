@@ -35,6 +35,37 @@ def weapon(w: str | None) -> str | None:
     return s
 
 
+_VEHICLE_FIXES = {"su": "Su", "mig": "MiG", "saab": "Saab", "jas": "JAS", "ussr": "", "us": "", "germ": "",
+                  "uk": "", "jp": "", "cn": "", "it": "", "fr": "", "sw": "", "il": ""}
+
+
+def vehicle(v: str | None) -> str | None:
+    """'fa_18c_late' -> 'F/A-18C Late', 'su_30mkk' -> 'Su-30MKK', 'saab_jas39c' -> 'Saab JAS39C'."""
+    if not v:
+        return v
+    if v.startswith("fa_"):
+        v = "f/a_" + v[3:]
+    tokens = [t for t in v.split("_") if t]
+    out: list[str] = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+        low = t.lower()
+        if low in _VEHICLE_FIXES and not out and nxt is not None and _VEHICLE_FIXES[low] == "":
+            i += 1  # country prefix (ussr_t_80u -> T-80U)
+            continue
+        prefix = _VEHICLE_FIXES.get(low, t.upper() if len(t) <= 3 or "/" in t else t.title())
+        if (nxt and any(c.isdigit() for c in nxt) and not any(c.isdigit() for c in t) and len(t) <= 4
+                and low != "saab"):
+            out.append(f"{_VEHICLE_FIXES.get(low, t.upper())}-{nxt.upper()}")
+            i += 2
+            continue
+        out.append(t.upper() if any(c.isdigit() for c in t) else prefix)
+        i += 1
+    return " ".join(out)
+
+
 def map_name(map_id: str | None) -> str | None:
     """'air_grand_canyon' -> 'Grand Canyon' (fallback when no localized name is known)."""
     if not map_id:

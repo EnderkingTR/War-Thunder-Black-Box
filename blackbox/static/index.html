@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="tr" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BlackBox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app.css">
+<script>
+  try { document.documentElement.dataset.theme = localStorage.getItem("bb-theme") || "paper"; } catch (e) {}
+</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/ozet" aria-label="BlackBox ana sayfa">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-word">BLACKBOX</span>
+    <span class="brand-sub">WT · Uçuş kayıt analizi</span>
+  </a>
+  <nav class="tabs" id="tabs">
+    <a href="#/ozet" data-tab="ozet">Özet</a>
+    <a href="#/maclar" data-tab="maclar">Maçlar</a>
+    <a href="#/silahlar" data-tab="silahlar">Silahlar</a>
+    <a href="#/haritalar" data-tab="haritalar">Haritalar</a>
+    <a href="#/araclar" data-tab="araclar">Araçlar</a>
+    <a href="#/grind" data-tab="grind">Grind</a>
+  </nav>
+  <div class="top-right">
+    <span class="pilot" id="pilot"></span>
+    <button class="btn" id="importBtn" type="button">İçe aktar</button>
+    <div class="themes" role="radiogroup" aria-label="Renk teması">
+      <button type="button" data-theme-set="paper" title="Kâğıt" aria-label="Kâğıt teması"></button>
+      <button type="button" data-theme-set="graphite" title="Grafit" aria-label="Grafit teması"></button>
+      <button type="button" data-theme-set="olive" title="Zeytin" aria-label="Zeytin teması"></button>
+      <button type="button" data-theme-set="arctic" title="Arktik" aria-label="Arktik teması"></button>
+    </div>
+  </div>
+</header>
+
+<section class="filterbar" id="filterbar">
+  <div class="seg" id="typeSeg" role="radiogroup" aria-label="Tür">
+    <button type="button" data-type="air">Hava</button>
+    <button type="button" data-type="ground">Kara</button>
+    <button type="button" data-type="all">Tümü</button>
+  </div>
+  <label class="field"><span>Araç</span><select id="fVehicle"></select></label>
+  <label class="field"><span>Harita</span><select id="fMap"></select></label>
+  <label class="field"><span>Son</span>
+    <select id="fLast">
+      <option value="">Tüm maçlar</option><option value="10">10 maç</option>
+      <option value="20">20 maç</option><option value="50">50 maç</option><option value="100">100 maç</option>
+    </select>
+  </label>
+  <label class="field"><span>Başlangıç</span><input type="date" id="fSince"></label>
+  <button class="btn ghost" id="fReset" type="button">Sıfırla</button>
+  <span class="filter-count" id="fCount"></span>
+</section>
+
+<main id="view" tabindex="-1"></main>
+<div class="tip" id="tip" role="tooltip"></div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -9,6 +9,7 @@
     python -m blackbox maps                     haritalar ve isimleri
     python -m blackbox name-map <map_id> <ad>   bir haritaya isim ver
     python -m blackbox unknown                  tanınmayan kill feed satırları
+    python -m blackbox web                      web arayüzünü aç (http://127.0.0.1:8765)
 
 Filtreler: --vehicle fa_18c  --map İspanya  --last 20  --since 2026-11-01  --type air|ground|all
 """
@@ -350,6 +351,13 @@ def cmd_name_map(args):
     print("Kaydedildi.")
 
 
+def cmd_web(args):
+    from . import web
+    me = require_player()
+    replay_dir = Path(load_config().get("replay_dir") or importer.DEFAULT_REPLAY_DIR)
+    web.serve(me, replay_dir, port=args.port, open_browser=not args.no_browser)
+
+
 def cmd_unknown(args):
     con = db.connect()
     rows = con.execute("SELECT raw, COUNT(*) n FROM events WHERE kind = 'other' GROUP BY raw ORDER BY n DESC").fetchall()
@@ -385,6 +393,8 @@ def main():
     sp = sub.add_parser("maps"); sp.set_defaults(f=cmd_maps)
     sp = sub.add_parser("name-map"); sp.add_argument("map_id"); sp.add_argument("name"); sp.set_defaults(f=cmd_name_map)
     sp = sub.add_parser("unknown"); sp.set_defaults(f=cmd_unknown)
+    sp = sub.add_parser("web"); sp.add_argument("--port", type=int, default=8765)
+    sp.add_argument("--no-browser", action="store_true"); sp.set_defaults(f=cmd_web)
     args = ap.parse_args()
     args.f(args)
 
