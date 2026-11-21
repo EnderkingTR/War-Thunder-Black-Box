@@ -12,7 +12,7 @@ import re
 
 G = 9.81
 DEF_WINDOW_S = 15.0       # look this far back from the first hit
-LOW_RADIO_ALT_M = 100     # below this radar missiles start to suffer from multipath
+LOW_RADIO_ALT_M = 60      # below this radar missiles lose the target to multipath (current game: ~60 m)
 LOW_ENERGY_TAS = 600      # km/h; slower than this (while airborne and not landing) is "low energy"
 THREAT_MAX_KM = 60
 

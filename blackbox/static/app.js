@@ -23,6 +23,8 @@ const store = {
 };
 
 async function api(path, params) {
+  // several player profiles: every request names the selected one
+  if (state.players && state.players.length > 1) params = { ...(params || {}), player: state.player };
   const q = params ? "?" + new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString() : "";
   const r = await fetch(`/api/${path}${q}`);
   const j = await r.json();
@@ -355,7 +357,8 @@ function aspectStack(r) {
 }
 
 async function pageSkills(view) {
-  const s = await api("skills", state.filters);
+  const [s, tr] = await Promise.all([api("skills", state.filters), api("trend", state.filters).catch(() => null)]);
+  s.trend = tr;
   if (s.kind === "ground") return pageSkillsGround(view, s);
   const e = s.energy, lob = s.lobby, fd = s.first_death;
   const nDeaths = s.classes.reduce((a, c) => a + c.my_deaths, 0);
@@ -366,6 +369,7 @@ async function pageSkills(view) {
   <div class="grid">
     ${panel("Güçlü ve zayıf yönler", findingList(s.findings), { cls: "c12", aside: "lobiyle kıyas + uçuş verisi" })}
     ${basesPanel(s.bases)}
+    ${trendPanel(s.trend, false)}
     <section class="panel c12">${kpis([
       { label: "Füzeden kaçış / maç", value: num(lob.my_ev, 2), sub: `lobi ${num(lob.l_ev, 2)}`, hl: lob.my_ev > lob.l_ev },
       { label: "K/D", value: lob.my_d ? num(lob.my_k / lob.my_d, 2) : "–", sub: `lobi ${lob.l_d ? num(lob.l_k / lob.l_d, 2) : "–"}` },
@@ -381,7 +385,7 @@ async function pageSkills(view) {
     ${panel("Vurulmadan önceki 15 saniye", '<div id="dt"></div>', { cls: "c12", flush: true, aside: "telemetrili ölümler · satıra tıkla: maç" })}
   </div>
   <p class="note">Oyun füze atışını ve RWR'ı dışarı vermediği için yön analizi <b>en yakın görünen düşman uçağına</b> göre yapılır; atan uçak o olmayabilir.
-  Notch: düşmana göre 65–115°. Multipath: radar irtifası 100 m altı. Değerlendirme füzenin türüne göre yapılır: radar için notch / multipath / soğuk kaçış, IR ve top için sert manevra (6 G+) ya da kaçış aranır.</p>`;
+  Notch: düşmana göre 65–115°. Multipath: radar irtifası 60 m altı. Değerlendirme füzenin türüne göre yapılır: radar için notch / multipath / soğuk kaçış, IR ve top için sert manevra (6 G+) ya da kaçış aranır.</p>`;
   const box = $("#dt", view);
   if (!s.defense.length) {
     box.innerHTML = empty("Telemetrili ölüm yok.", "Kaydedici açıkken oynadığın maçlarda burada her ölümün son 15 saniyesi görünür.");
@@ -393,13 +397,45 @@ async function pageSkills(view) {
     { h: "Silah", k: "weapon", f: (r) => esc(r.weapon || "–") },
     { h: "Tür", k: "cls", f: (r) => `<span class="cls-chip">${CLS_SHORT[r.cls] || esc(r.cls)}</span>` },
     { h: "Yön: sıcak · notch · soğuk", k: "def_notch", f: aspectStack },
-    { h: "100 m altı", k: "def_low", n: true, f: (r) => (r.def_low == null ? "–" : `%${Math.round(100 * r.def_low)}`) },
+    { h: "60 m altı", k: "def_low", n: true, f: (r) => (r.def_low == null ? "–" : `%${Math.round(100 * r.def_low)}`) },
     { h: "Maks G", k: "def_max_g", n: true, f: (r) => num(r.def_max_g, 1) },
     { h: "Hız km/h", k: "def_tas1", n: true, f: (r) => (r.def_tas0 == null ? "–" : `${num(r.def_tas0)}<span class="dim"> → </span>${num(r.def_tas1)}`) },
     { h: "İrtifa m", k: "def_alt1", n: true, f: (r) => (r.def_alt0 == null ? "–" : `${num(r.def_alt0)}<span class="dim"> → </span>${num(r.def_alt1)}`) },
     { h: "Görülen", k: "style", cls: "dim wrap" },
     { h: "Değerlendirme", k: "verdict", f: (r) => `<span class="tag ${VERDICT[r.verdict][1]}">${VERDICT[r.verdict][0]}</span>` },
   ], s.defense, { key: "session_id", sortKey: "started", onRow: (k) => (location.hash = `#/mac/${k}`) });
+}
+
+// small rolling-average line chart; better = "up" or "down" colours the change
+function trendChart(points, key, { label, fmt = (v) => num(v, 2), better = "up" } = {}) {
+  const pts = points.map((p, i) => ({ i, v: p[key], t: p.started })).filter((p) => p.v != null);
+  if (pts.length < 2) return `<div class="trend"><div class="trend-h">${esc(label)}</div><div class="dim">Yeterli veri yok.</div></div>`;
+  const W = 300, H = 80, pad = 6;
+  const vs = pts.map((p) => p.v), lo = Math.min(...vs), hi = Math.max(...vs), span = hi - lo || 1;
+  const n = points.length - 1 || 1;
+  const x = (i) => pad + ((W - 2 * pad) * i) / n, y = (v) => H - pad - ((H - 2 * pad) * (v - lo)) / span;
+  const d = pts.map((p, j) => `${j ? "L" : "M"}${x(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join("");
+  const first = pts[0].v, last = pts[pts.length - 1].v;
+  const up = last > first, flat = Math.abs(last - first) < span * 0.05;
+  const good = flat ? "" : (up === (better === "up") ? "win" : "loss");
+  const arrow = flat ? "→" : up ? "↗" : "↘";
+  const tip = (p) => `${day(p.t)}: ${fmt(p.v)}`;
+  return `<div class="trend"><div class="trend-h">${esc(label)}<span class="trend-v ${good}">${fmt(first)} ${arrow} <b>${fmt(last)}</b></span></div>
+    <svg viewBox="0 0 ${W} ${H}" class="trend-svg"><path d="${d}" class="trend-line"/>
+    ${pts.map((p) => `<circle cx="${x(p.i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="7" fill="transparent" data-tip="${esc(tip(p))}"/>`).join("")}
+    <circle cx="${x(pts[pts.length - 1].i).toFixed(1)}" cy="${y(last).toFixed(1)}" r="3" class="trend-dot"/></svg></div>`;
+}
+
+function trendPanel(t, ground) {
+  if (!t || t.points.length < 2) return "";
+  const pctf = (v) => `%${Math.round(100 * v)}`;
+  const charts = ground
+    ? [trendChart(t.points, "kd", { label: "K/D" }), trendChart(t.points, "kpm", { label: "Kill / maç" }),
+       trendChart(t.points, "cz", { label: "Bölge / maç" }), trendChart(t.points, "score", { label: "Skor", fmt: (v) => num(v) })]
+    : [trendChart(t.points, "kd", { label: "K/D" }), trendChart(t.points, "bases", { label: "Üs / maç" }),
+       trendChart(t.points, "rp_min", { label: "RP / dakika", fmt: (v) => num(v) }),
+       trendChart(t.points, "ir", { label: "IR füzesiyle ölüm payı", fmt: pctf, better: "down" })];
+  return panel("Gelişim", `<div class="trends">${charts.join("")}</div><p class="note">Her nokta son ${t.window} maçın ortalaması (hareketli ortalama), soldan sağa eskiden yeniye. Yeşil: iyiye gidiyor, kırmızı: kötüye.</p>`, { cls: "c12", aside: `${t.n} maç` });
 }
 
 function basesPanel(b) {
@@ -411,7 +447,12 @@ function basesPanel(b) {
     { label: "Üs aldığın maç", value: num(100 * (b.share || 0)), unit: "%", sub: `${b.with_bases || 0} / ${b.n} maç` },
     { label: "En çok üs", value: b.best ?? "–", sub: "tek maçta" },
     { label: "Etki / maç", value: num(b.impact, 2), sub: "hava kill + üs" },
-  ]) + (w || wo ? `<table class="data"><thead><tr><th>Sonuç metni olan maçlar</th><th class="n">Maç</th><th class="n">RP/maç</th><th class="n">RP/dk</th><th class="n">SL/maç</th><th class="n">SL/dk</th><th class="n">Skor</th><th class="n">Kill</th></tr></thead><tbody>
+    ...(b.timing && b.timing.n ? [
+      { label: "İlk üs (ortanca)", value: b.timing.first_base_s == null ? "–" : mmss(b.timing.first_base_s), sub: "maç başından" },
+      { label: "Üsler arası", value: b.timing.gap_s == null ? "–" : `${b.timing.gap_s}`, unit: b.timing.gap_s == null ? "" : " sn", sub: "aynı maçta, ortanca" },
+      { label: "Üs almadan düştüğün", value: b.timing.died ? num((100 * b.timing.died_before_base) / b.timing.died) : "–", unit: b.timing.died ? "%" : "", sub: `düştüğün ${b.timing.died} maçta` },
+    ] : []),
+  ]) + (b.weapons && b.weapons.length ? `<div style="padding:12px var(--pad) 0"><div class="kpi-label" style="margin-bottom:8px">Üs aldığın silahlar</div>${barList(b.weapons, { cls: "acc", fmt: (it) => `<b>${it.n}</b> üs` })}</div>` : "") + (w || wo ? `<table class="data"><thead><tr><th>Sonuç metni olan maçlar</th><th class="n">Maç</th><th class="n">RP/maç</th><th class="n">RP/dk</th><th class="n">SL/maç</th><th class="n">SL/dk</th><th class="n">Skor</th><th class="n">Kill</th></tr></thead><tbody>
       ${row("Üs aldığın", w)}${row("Üs almadığın", wo)}</tbody></table>` : "") +
     `<p class="note">Üs, ton hasarına göre değil <b>alınan üs sayısına</b> göre sayılır. Sayı sonuç metnindeki "Yok edilen üsler" satırlarından gelir.
     Sonuç metni olmayan maçlarda (≈) o uçakla verdiğin üs hasarının sonuç metinli maçlardaki üs başına ortalamasıyla tahmin edilir. Hiç sonuç metni olmayan uçaklar tahmin edilmez.
@@ -432,7 +473,10 @@ function pageSkillsGround(view, s) {
       { label: "Ölüm / maç", value: num(lob.my_dpm, 2), sub: `lobi ${num(lob.l_dpm, 2)}` },
       { label: "Asist / maç", value: num(lob.my_a, 2), sub: `lobi ${num(lob.l_a, 2)}` },
       { label: "İlk ölüm (ortanca)", value: mins(fd.me), unit: " dk", sub: `lobi ${mins(fd.lobby)} dk` },
+      { label: "Bölge / maç", value: num(lob.my_cz, 2), sub: `lobi ${num(lob.l_cz, 2)}`, hl: lob.my_cz > lob.l_cz },
     ])}</section>
+    ${trendPanel(s.trend, true)}
+    ${s.vehicles && s.vehicles.length ? panel("Araçlarına göre", '<div id="gvt"></div>', { cls: "c12", flush: true, aside: "replay kill kayıtlarından" }) : ""}
     ${panel("Seni ne düşürüyor", pairBars(s.classes, "my_deaths", "lobby_deaths"), { cls: "c6", aside: `düşmanın araç türü · ${covTxt}` })}
     ${panel("Neyi düşürüyorsun", pairBars(s.classes.filter((c) => c.id !== "none"), "my_kills", "lobby_kills"), { cls: "c6", aside: `hedefin araç türü · ${s.classes.reduce((a, c) => a + c.my_kills, 0)}/${lob.my_k || 0} kill eşleşti` })}
     ${panel("Seni vuran mühimmat", pairBars(s.ammo, "my_deaths", "lobby_deaths"), { cls: "c6", aside: "tank / SPAA atışları · tahmini" })}
@@ -440,7 +484,17 @@ function pageSkillsGround(view, s) {
   </div>
   <p class="note">Kara maçlarında yeniden doğan araçlar replay'de yeni kimlik alır; bir ölüm ancak o araç daha önce bir şey vurduysa ya da ilk araçsa oyuncuya eşlenebilir.
   Bu yüzden türe göre dağılım ölümlerin bir kısmından hesaplanır (${covTxt}). K/D, kill, ölüm ve asist sayıları maç sonu tablosundan geldiği için tamdır.
-  Mühimmat türü silah adından tahmin edilir.</p>`;
+  Mühimmat türü silah adından tahmin edilir. Araçlarına göre tablosunda kill'ler kesin, ölümler eşleşebildiği kadarıyla sayılır.</p>`;
+  const vt = $("#gvt", view);
+  if (vt) {
+    s.vehicles.forEach((v) => { v.kd = v.d ? v.k / v.d : v.k; });
+    const maxKd = Math.max(...s.vehicles.map((v) => v.kd || 0), 0.01);
+    mountTable(vt, [
+      { h: "Araç", k: "vehicle_name" }, { h: "Tür", k: "type", cls: "dim" },
+      { h: "Maç", k: "n", n: true }, { h: "Kill", k: "k", n: true }, { h: "Ölüm", k: "d", n: true },
+      { h: "K/D", k: "kd", n: true, f: (r) => rateBar(r.kd, maxKd, "acc") },
+    ], s.vehicles, { sortKey: "k" });
+  }
 }
 
 function rateBar(v, max = 1, cls = "", digits = 2) {
@@ -469,7 +523,7 @@ async function pageMaps(view) {
     { h: "K/D", k: "kd", n: true, f: (r) => rateBar(r.kd, maxKd, "acc") },
     { h: "Ort. skor", k: "score", n: true, f: (r) => num(r.score) },
     { h: "Lobi dilimi", k: "top", n: true, f: (r) => (r.lobby == null ? "–" : `%${Math.round(100 * r.lobby)}`) },
-    ...(ground ? [] : [
+    ...(ground ? [{ h: "Bölge/maç", k: "cz", n: true, f: (r) => num(r.cz, 2) }] : [
       { h: "Üs/maç", k: "bpm", n: true, f: (r) => (r.bpm == null ? '<span class="dim">–</span>' : rateBar(r.bpm, maxBpm, "acc")) },
       { h: "İlk üs", k: "first_base_s", n: true, f: (r) => (r.first_base_s == null ? '<span class="dim">–</span>' : mmss(r.first_base_s)) },
       { h: "İlk ölüm", k: "first_death_s", n: true, f: (r) => (r.first_death_s == null ? '<span class="dim">–</span>' : mmss(r.first_death_s)) },
@@ -495,8 +549,9 @@ async function pageVehicles(view) {
   $("#fCount").textContent = `${rows.length} araç`;
   const maxKd = Math.max(...rows.map((r) => (r.d ? r.k / r.d : r.k || 0)), 0.01);
   rows.forEach((r) => { r.kd = r.d ? r.k / r.d : r.k; r.wr = (r.w || 0) + (r.l || 0) ? r.w / (r.w + r.l) : null; });
-  view.innerHTML = `<div class="page-title"><h1>Araçlar</h1></div>
-    <div class="grid">${panel("Araç performansı", '<div id="vt"></div>', { flush: true })}</div>`;
+  view.innerHTML = `<div class="page-title"><h1>Araçlar</h1><span class="meta">Araçlarını yan yana karşılaştır · satıra tıkla: o araçla filtrele</span></div>
+    <div class="grid">${panel("Araç performansı", '<div id="vt"></div>', { flush: true, aside: "başlığa tıkla: sırala" })}</div>
+    <p class="note">İlk ölüm: replay'deki ilk ölümün ortalama dakikası (düştüğün maçlarda). Ölmeden biten: hiç düşmeden bitirdiğin maç oranı. RP/dk ve SL/dk yalnızca sonuç metni olan maçlardan.</p>`;
   mountTable($("#vt", view), [
     { h: "Araç", k: "vehicle_name" },
     { h: "Tür", k: "vehicle_type", cls: "dim" },
@@ -506,6 +561,9 @@ async function pageVehicles(view) {
     { h: "K/D", k: "kd", n: true, f: (r) => rateBar(r.kd, maxKd, "acc") },
     { h: "Ort. skor", k: "score", n: true, f: (r) => num(r.score) },
     { h: "Lobi dilimi", k: "lobby", n: true, f: (r) => (r.lobby == null ? "–" : `%${Math.round(100 * r.lobby)}`) },
+    { h: "İlk ölüm", k: "first_death_s", n: true, f: (r) => (r.first_death_s == null ? '<span class="dim">–</span>' : mmss(r.first_death_s)) },
+    { h: "Ölmeden biten", k: "survived", n: true, f: (r) => (r.n ? `%${Math.round((100 * (r.survived || 0)) / r.n)}` : "–") },
+    ...(state.filters.type === "ground" ? [{ h: "Bölge/maç", k: "cz", n: true, f: (r) => num(r.cz, 2) }] : []),
     ...(state.filters.type === "ground" ? [] : [{ h: "Üs/maç", k: "bases", n: true, f: (r) => (r.nb ? num(r.bases / r.nb, 2) + (r.nb < r.n ? ` <span class="dim" title="Üs sayısı bilinen maç">(${r.nb} maç)</span>` : "") : '<span class="dim">–</span>') }]),
     { h: "SL/maç", k: "sl", n: true, f: (r) => num(r.sl) },
     { h: "RP/maç", k: "rp", n: true, f: (r) => num(r.rp) },
@@ -862,7 +920,23 @@ async function route() {
   $$(".themes button").forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.themeSet)));
   $("#importBtn").addEventListener("click", runImport);
   bindFilters();
-  try { state.player = (await api("me")).player; $("#pilot").textContent = state.player; } catch { /* ignore */ }
+  try {
+    const me = await api("me");
+    state.players = me.players || [me.player];
+    const saved = store.get("bb-player", null);
+    state.player = state.players.includes(saved) ? saved : me.player;
+    const pilot = $("#pilot");
+    if (state.players.length > 1) {
+      pilot.innerHTML = `<select id="playerSel" class="player-sel" title="Oyuncu profili">${state.players.map((p) => `<option${p === state.player ? " selected" : ""}>${esc(p)}</option>`).join("")}</select>`;
+      $("#playerSel").addEventListener("change", async (e) => {
+        state.player = e.target.value;
+        store.set("bb-player", state.player);
+        state.filters.vehicle = ""; state.filters.map = "";
+        await loadFilterOptions();
+        route();
+      });
+    } else pilot.textContent = state.player;
+  } catch { /* ignore */ }
   await loadFilterOptions();
   addEventListener("hashchange", route);
   route();

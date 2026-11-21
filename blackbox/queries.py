@@ -213,7 +213,7 @@ def maps(con, f: dict) -> list[dict]:
         SUM(deaths) d, AVG(score) score, AVG(1.0 * (lobby_pos - 1) / NULLIF(n_players - 1, 0)) lobby,
         SUM(missile_evades) ev, AVG(total_sl) sl, AVG(total_rp) rp, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_rp END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) rp_min, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_sl END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) sl_min,
         SUM(bases_est) bases, COUNT(bases_est) nb, SUM(bases_est > 0) base_matches,
-        AVG(fb.t) first_base_s, AVG(fd.t) first_death_s
+        AVG(fb.t) first_base_s, AVG(fd.t) first_death_s, AVG(capture_zone) cz
         FROM battles b LEFT JOIN fb USING (session_id) LEFT JOIN fd USING (session_id){w}
         GROUP BY map ORDER BY n DESC""", p))
 
@@ -223,8 +223,11 @@ def vehicles(con, f: dict) -> list[dict]:
     rows = _rows(con.execute(f"""SELECT vehicle, vehicle_type, COUNT(*) n, SUM(result='win') w, SUM(result='loss') l,
         SUM(kills) k, SUM(deaths) d, AVG(score) score, AVG(1.0 * (lobby_pos - 1) / NULLIF(n_players - 1, 0)) lobby,
         SUM(missile_evades) ev, AVG(total_sl) sl, AVG(total_rp) rp, SUM(has_result) nres, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_rp END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) rp_min, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_sl END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) sl_min,
-        SUM(bases_est) bases, COUNT(bases_est) nb
-        FROM battles b{w} GROUP BY vehicle ORDER BY n DESC""", p))
+        SUM(bases_est) bases, COUNT(bases_est) nb, AVG(capture_zone) cz, AVG(fd.t) first_death_s,
+        SUM(fd.t IS NULL AND b.has_replay = 1) survived
+        FROM battles b LEFT JOIN (SELECT session_id, MIN(ms) / 1000.0 t FROM replay_kills WHERE me_victim = 1
+                                  GROUP BY session_id) fd USING (session_id){w}
+        GROUP BY vehicle ORDER BY n DESC""", p))
     return _decorate(rows)
 
 
@@ -242,6 +245,51 @@ def grind(con, f: dict) -> dict:
         AVG(repair_sl) repair, SUM(played_s) played, SUM(total_sl) sum_sl, SUM(total_rp) sum_rp
         FROM battles b{w} GROUP BY vehicle ORDER BY n DESC""", p)))
     return {"battles": rows, "totals": agg, "by_vehicle": by_vehicle}
+
+
+def trend(con, f: dict) -> dict:
+    """Rolling averages over the last `win` battles, oldest first: is it getting better?"""
+    w, p = build_where(f)
+    rows = _rows(con.execute(f"""SELECT session_id, started, kills, deaths, score, bases_est, total_rp, played_s,
+        has_result, has_replay, capture_zone FROM battles b{w} ORDER BY started""", p))
+    deaths: dict = {}
+    for r in con.execute(f"""SELECT k.session_id, k.weapon FROM replay_kills k
+            JOIN battles b ON b.session_id = k.session_id{w} AND k.me_victim = 1""", p):
+        deaths.setdefault(r[0], []).append(skills.weapon_class(r[1]))
+    n = len(rows)
+    win = max(3, min(10, n // 3))
+    pts = []
+    for i in range(win - 1, n):
+        seg = rows[i - win + 1:i + 1]
+        k = sum(r["kills"] or 0 for r in seg)
+        d = sum(r["deaths"] or 0 for r in seg)
+        bs = [r["bases_est"] for r in seg if r["bases_est"] is not None]
+        res = [r for r in seg if r["has_result"] and r["played_s"]]
+        dw = [c for r in seg for c in deaths.get(r["session_id"], [])]
+        cz = [r["capture_zone"] for r in seg if r["capture_zone"] is not None]
+        pts.append({"started": seg[-1]["started"], "kd": k / d if d else None, "kpm": k / len(seg),
+                    "score": _avg([r["score"] for r in seg]),
+                    "bases": sum(bs) / len(bs) if bs else None,
+                    "rp_min": 60 * sum(r["total_rp"] or 0 for r in res) / sum(r["played_s"] for r in res) if res else None,
+                    "ir": dw.count("ir") / len(dw) if dw else None,
+                    "cz": sum(cz) / len(cz) if cz else None})
+    return {"window": win, "n": n, "points": pts}
+
+
+def ground_vehicles(con, f: dict) -> list[dict]:
+    """Kills and deaths per own vehicle in ground battles (several vehicles per battle)."""
+    w, p = build_where(f)
+    rows = _rows(con.execute(f"""SELECT v, SUM(k) k, SUM(d) d, COUNT(DISTINCT sid) n FROM (
+          SELECT k.killer_vehicle v, 1 k, 0 d, k.session_id sid FROM replay_kills k
+            JOIN battles b ON b.session_id = k.session_id{w} AND k.me_killer = 1 AND k.destroyed_weapon IS NULL
+          UNION ALL
+          SELECT k.victim_vehicle v, 0, 1, k.session_id FROM replay_kills k
+            JOIN battles b ON b.session_id = k.session_id{w} AND k.me_victim = 1)
+        WHERE v IS NOT NULL GROUP BY v ORDER BY k + d DESC""", p + p))
+    types = dict(con.execute("SELECT vehicle, type FROM vehicle_types").fetchall())
+    for r in rows:
+        r["vehicle"], r["vehicle_name"], r["type"] = r["v"], names.vehicle(r["v"]), types.get(r["v"])
+    return rows
 
 
 def missing_results(con, f: dict) -> list[dict]:
@@ -346,6 +394,25 @@ def _bases(con, w, p) -> dict:
         AVG(score) score, AVG(air_kills) kills, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_rp END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) rp_min, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_sl END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) sl_min
         FROM battles b{w} AND b.has_result = 1 GROUP BY 1""", p))
     b["split"] = {("with" if r["took"] else "without"): r for r in split}
+    # timing: when the first base falls and whether you die before reaching one (result text + replay)
+    timing = _rows(con.execute(f"""
+        SELECT b.session_id, b.bases, (SELECT MIN(time_s) FROM result_items ri WHERE ri.session_id = b.session_id
+                AND ri.category = 'Yok edilen üsler') fb,
+               (SELECT MIN(ms) / 1000.0 FROM replay_kills k WHERE k.session_id = b.session_id AND k.me_victim = 1) fd
+        FROM battles b{w} AND b.has_result = 1 AND b.has_replay = 1""", p))
+    times = [con.execute("SELECT time_s FROM result_items WHERE session_id = ? AND category = 'Yok edilen üsler' "
+                         "ORDER BY time_s", (t["session_id"],)).fetchall() for t in timing]
+    gaps = [b2[0] - b1[0] for ts in times for b1, b2 in zip(ts, ts[1:])]
+    died = [t for t in timing if t["fd"] is not None]
+    b["timing"] = {
+        "n": len(timing), "first_base_s": _median([t["fb"] for t in timing]),
+        "gap_s": _median(gaps), "died": len(died),
+        "died_before_base": sum(1 for t in died if t["fb"] is None or t["fd"] < t["fb"]),
+        "died_without_base": sum(1 for t in died if not t["bases"]),
+    }
+    b["weapons"] = _rows(con.execute(f"""SELECT ri.weapon name, COUNT(*) n FROM result_items ri
+        JOIN battles b ON b.session_id = ri.session_id{w} AND ri.category = 'Yok edilen üsler'
+        GROUP BY ri.weapon ORDER BY n DESC LIMIT 6""", p))
     n = b["n"] or 0
     b["per_match"] = (b["bases"] or 0) / n if n else None
     b["share"] = (b["with_bases"] or 0) / n if n else None
@@ -370,7 +437,8 @@ def _lobby(con, w, p) -> dict:
           SUM(CASE WHEN is_me=0 THEN mode_kills END) l_k, SUM(CASE WHEN is_me=0 THEN deaths END) l_d,
           AVG(CASE WHEN is_me=1 THEN assists END) my_a, AVG(CASE WHEN is_me=0 THEN assists END) l_a,
           AVG(CASE WHEN is_me=1 THEN mode_kills END) my_kpm, AVG(CASE WHEN is_me=0 THEN mode_kills END) l_kpm,
-          AVG(CASE WHEN is_me=1 THEN deaths END) my_dpm, AVG(CASE WHEN is_me=0 THEN deaths END) l_dpm
+          AVG(CASE WHEN is_me=1 THEN deaths END) my_dpm, AVG(CASE WHEN is_me=0 THEN deaths END) l_dpm,
+          AVG(CASE WHEN is_me=1 THEN capture_zone END) my_cz, AVG(CASE WHEN is_me=0 THEN capture_zone END) l_cz
         FROM replay_players rp JOIN bs USING (session_id)""", p).fetchone())
 
 
@@ -412,14 +480,31 @@ def _ground_report(con, f, kills) -> dict:
     my_fd, lob_fd = _first_death(kills)
     lob = _lobby(con, w, p)
     coverage = {"mapped": sum(1 for k in real if k["me_victim"]), "total": lob.get("my_d")}
+    vehicles = ground_vehicles(con, f)
     return {"kind": "ground", "classes": by_killer, "ammo": ammo, "coverage": coverage,
             "first_death": {"me": my_fd, "lobby": lob_fd},
-            "lobby": lob, "defense": [], "energy": {"n": 0},
-            "findings": _ground_findings(by_killer, ammo, my_fd, lob_fd, lob)}
+            "lobby": lob, "defense": [], "energy": {"n": 0}, "vehicles": vehicles,
+            "findings": _ground_findings(by_killer, ammo, my_fd, lob_fd, lob, vehicles)}
 
 
-def _ground_findings(groups, ammo, my_fd, lob_fd, lob) -> list[dict]:
+def _ground_findings(groups, ammo, my_fd, lob_fd, lob, vehicles=()) -> list[dict]:
     out = []
+    _ground_extra = []
+    if lob.get("my_cz") is not None and lob.get("l_cz"):
+        r = lob["my_cz"] / lob["l_cz"]
+        detail = f"Maç başına {lob['my_cz']:.2f} bölge ele geçirme; lobi {lob['l_cz']:.2f}."
+        if r >= 1.3:
+            _ground_extra.append(("strong", "Bölge ele geçirmede lobinin üstündesin", detail))
+        elif r <= 0.6:
+            _ground_extra.append(("weak", "Bölgelere az giriyorsun", detail))
+    good = [v for v in vehicles if v["k"] + v["d"] >= 4]
+    if len(good) >= 2:
+        best = max(good, key=lambda v: v["k"] / max(v["d"], 1))
+        worst = min(good, key=lambda v: v["k"] / max(v["d"], 1))
+        if best is not worst:
+            _ground_extra.append(("note", f"En verimli aracın: {best['vehicle_name']}",
+                                  f"{best['vehicle_name']}: {best['k']} kill / {best['d']} ölüm; "
+                                  f"{worst['vehicle_name']}: {worst['k']} kill / {worst['d']} ölüm (eşleşen kayıtlar)."))
 
     def add(kind, title, detail, n, min_n=5, hint=None):
         out.append({"kind": kind, "title": title, "detail": detail, "n": n, "low_data": n < min_n, "hint": hint})
@@ -474,6 +559,8 @@ def _ground_findings(groups, ammo, my_fd, lob_fd, lob) -> list[dict]:
         top = max(ammo, key=lambda c: c["my_kills"])
         add("note", f"Kara kill'lerinin çoğu: {top['name']}",
             f"Kara hedeflerine aldığın kill'lerin {_pct(top['my_kills'] / mk)} kadarı bu mühimmatla.", mk)
+    for kind, title, detail in _ground_extra:
+        add(kind, title, detail, lob.get("n") or 0)
     order = {"weak": 0, "strong": 1, "note": 2}
     out.sort(key=lambda x: (x["low_data"], order[x["kind"]]))
     return out
@@ -486,7 +573,7 @@ def _findings(classes, my_fd, lob_fd, lob, defense, energy, bases=None) -> list[
         out.append({"kind": kind, "title": title, "detail": detail, "n": n, "low_data": n < min_n, "hint": hint})
 
     hints = {
-        "radar": "Kilit uyarısında füzeye dik dön (notch) ya da 100 m altına in (multipath); chaff'ı notch'la birlikte at.",
+        "radar": "Kilit uyarısında füzeye dik dön (notch) ya da 60 m altına in (multipath); chaff'ı notch'la birlikte at.",
         "ir": "8-10 km içinde art yakıcıyı kıs, flare'ı füze atılmadan önce de kullan, düşmanın arka yarı küresinde oyalanma.",
         "sam": "Haritadaki SAM bölgelerine 10-15 km'den fazla yaklaşma; alçakta arazinin arkasında kal.",
         "gun": "Yakın it dalaşında enerjiyi koru, düz uçuştan kaçın.",
@@ -546,7 +633,7 @@ def _findings(classes, my_fd, lob_fd, lob, defense, energy, bases=None) -> list[
         notch = sum(1 for d in radar if (d["def_notch"] or 0) >= 0.35)
         mp = sum(1 for d in radar if (d["def_low"] or 0) >= 0.5)
         detail = (f"Radar füzesiyle düştüğün {len(radar)} ölümün {notch} tanesinde notch, {mp} tanesinde "
-                  f"multipath (100 m altı) görüldü.")
+                  f"multipath (60 m altı) görüldü.")
         if len(undefended) / len(radar) >= 0.5:
             add("weak", "Vurulduğun radar füzelerinde savunma zayıf", detail, len(radar), 4, hints["radar"])
         elif len(undefended) / len(radar) <= 0.25:
@@ -583,6 +670,13 @@ def _findings(classes, my_fd, lob_fd, lob, defense, energy, bases=None) -> list[
         if pm >= 0.5 or (bases["share"] or 0) >= 0.35:
             add("strong", "Üs bombalamada güçlüsün", detail, n, 5)
             out[-1]["prio"] = 1
+        tm = bases.get("timing") or {}
+        if tm.get("died", 0) >= 5 and tm["died_before_base"] / tm["died"] >= 0.5:
+            add("weak", "Düştüğün maçların çoğunda üs alamadan düşüyorsun",
+                f"Düştüğün {tm['died']} maçın {tm['died_before_base']} tanesinde ilk üssünü almadan önce düştün.",
+                tm["died"], 5,
+                "Üs koşusunda alçak ve hızlı gir, ilk dakikalarda radar füzelerine karşı arazinin arkasında kal; "
+                "önce en yakın üsse değil, düşman savaşçılarının uzak olduğu kanattaki üsse yönel.")
         elif pm > 0:
             add("note", "Arada üs alıyorsun", detail, n, 5)
         if w_ and wo and w_["rp"] and wo["rp"] and w_["n"] >= 3 and wo["n"] >= 3 and w_["rp"] >= 1.5 * wo["rp"]:

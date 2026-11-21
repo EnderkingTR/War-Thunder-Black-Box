@@ -32,6 +32,15 @@ Masaüstü). Hepsini birlikte açar: telemetri kaydedici, pano izleyici, web ara
 (yeni replay, kayıt ya da kopyalanan sonuç metni gelince birkaç saniye içinde aktarılır, açık sayfa kendini yeniler).
 Kapatmak için pencerede Ctrl+C. Aynısı komutla: `python -m blackbox start`.
 
+### Birden fazla oyuncu (aynı bilgisayar)
+
+Kardeşin aynı bilgisayarda kendi hesabıyla oynuyorsa profilini ekle:
+```powershell
+python -m blackbox setup KardesinOyunAdi --add
+```
+Her oyuncunun ayrı veritabanı olur (`blackbox-<ad>.db`); replay'ler lobide hangi oyuncu varsa onun profiline gider.
+Web arayüzünde sağ üstteki oyuncu adından profil seçilir; komut satırında `python -m blackbox --player KardesinOyunAdi stats`.
+
 ### Ayrı ayrı
 
 Oynamadan önce recorder'ı başlat (telemetri + pano izleyici):
@@ -66,6 +75,10 @@ Oyun füze atışını ve RWR'ı vermediği için tehdit, atan uçak değil en y
 Kara filtresinde Beceri sayfası seni düşüren araç türünü (tank, SPAA, uçak, helikopter) ve mühimmat türünü
 lobiyle karşılaştırır; kara maçlarında kill = kara + hava kill. Yeniden doğan araçlar replay'de yeni kimlik
 aldığı için ölümlerin bir kısmı araç türüne eşlenemeyebilir; sayfa kaçının eşlendiğini gösterir.
+
+Beceri sayfasındaki **Gelişim** paneli son 10 maçlık hareketli ortalamayla K/D, üs/maç, RP/dk ve IR füzesiyle
+ölüm payının (kara: K/D, kill, bölge, skor) zamanla nasıl değiştiğini gösterir. Multipath eşiği radar irtifası 60 m'dir.
+Kara Beceri sayfası araçlarına göre kill/ölüm ve bölge ele geçirmeyi lobiyle karşılaştırır.
 
 **Üs bombalama** ton hasarına göre değil **alınan üs sayısına** göre ölçülür (3 × Mk 77 ile de üs alınır).
 Sayı sonuç metnindeki "Yok edilen üsler" satırlarından gelir. Sonuç metni olmayan maçlarda (≈) o uçakla verilen üs

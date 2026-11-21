@@ -13,7 +13,7 @@ from .session import ROOT
 
 RESULTS_DIR = ROOT / "results"
 DEFAULT_REPLAY_DIR = Path(r"C:\Program Files (x86)\Steam\steamapps\common\War Thunder\Replays")
-REPLAY_VERSION = 4
+REPLAY_VERSION = 5
 GROUND_MODES = ("fetih", "hakimiyet", "çarpışma", "savaş", "conquest", "domination", "battle")
 
 
@@ -99,7 +99,7 @@ def import_replay(con, path: Path, me: str) -> str:
             "kills": p.get("kills"), "ground_kills": p.get("groundKills"), "ai_kills": p.get("aiKills"),
             "assists": p.get("assists"), "deaths": p.get("deaths"), "score": p.get("score"),
             "missile_evades": p.get("missileEvades"), "is_me": int(i == my_idx),
-            "damage_zone": p.get("damageZone"),
+            "damage_zone": p.get("damageZone"), "capture_zone": p.get("captureZone"),
             "mode_kills": (p.get("kills") or 0) + ((p.get("groundKills") or 0) if kind == "ground" else 0)})
 
     # killer_pid is the index into the results player list. Entity uids of first spawns are pid + a per-match
@@ -147,7 +147,7 @@ def import_replay(con, path: Path, me: str) -> str:
                     "my_rank": rank, "my_kills": p.get("kills"), "my_ground_kills": p.get("groundKills"),
                     "my_ai_kills": p.get("aiKills"), "my_deaths": p.get("deaths"), "my_assists": p.get("assists"),
                     "my_score": p.get("score"), "my_missile_evades": p.get("missileEvades"),
-                    "my_damage_zone": p.get("damageZone"),
+                    "my_damage_zone": p.get("damageZone"), "my_capture_zone": p.get("captureZone"),
                     "lobby_pos": by_score.index(my_idx) + 1, "team_pos": team.index(my_idx) + 1})
     db.insert(con, "replays", row)
     return sid
@@ -221,7 +221,9 @@ def _ts(s: str | None) -> float | None:
         return None
 
 
-def rebuild_battles(con) -> int:
+def rebuild_battles(con, strict: bool = False) -> int:
+    """strict: with several player profiles on one PC, a result text only counts when this player's replay of
+    the same battle exists (the clipboard folder is shared between profiles)."""
     with con:
         # learn localized map names from result texts
         for r in con.execute("""SELECT rp.map_id, rs.map_name FROM results rs
@@ -259,6 +261,7 @@ def rebuild_battles(con) -> int:
                 "air_kills": r["my_kills"], "ground_kills": r["my_ground_kills"],
                 "deaths": r["my_deaths"], "assists": r["my_assists"], "score": r["my_score"],
                 "missile_evades": r["my_missile_evades"], "damage_zone": r["my_damage_zone"],
+                "capture_zone": r["my_capture_zone"],
                 "lobby_pos": r["lobby_pos"], "n_players": r["n_players"],
                 "team_pos": r["team_pos"], "end_s": r["end_s"], "has_replay": 1}
         counts = {}
@@ -271,6 +274,8 @@ def rebuild_battles(con) -> int:
                 # middle digits; prefix and last 5 digits match
                 sid = next((s for s in rows if s[:8] == sid[:8] and s[-5:] == sid[-5:]
                             and not rows[s].get("has_result")), sid)
+            if strict and sid not in rows:
+                continue
             b = rows.setdefault(sid, {"session_id": sid, "map": r["map_name"],
                                       "kind": battle_kind(None, r["mode"]), "has_replay": 0})
             c = counts.get(r["session_id"], {})
@@ -308,10 +313,11 @@ def rebuild_battles(con) -> int:
     return len(rows)
 
 
-def run_import(me: str, replay_dir: Path, force: bool = False, log=print) -> dict:
-    con = db.connect()
+def run_import(me: str, replay_dir: Path, force: bool = False, log=print, db_path: Path | None = None,
+               strict: bool = False) -> dict:
+    con = db.connect(db_path)
     out = {"telemetry": import_recordings(con, me, force, log),
            "replays": import_replays(con, me, replay_dir, force, log),
            "results": import_results(con, log)}
-    out["battles"] = rebuild_battles(con)
+    out["battles"] = rebuild_battles(con, strict)
     return out

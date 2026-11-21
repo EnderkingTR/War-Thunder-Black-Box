@@ -28,7 +28,12 @@ def _filters(qs: dict) -> dict:
     return {k: qs[k][0] for k in ("type", "vehicle", "map", "since", "last") if qs.get(k) and qs[k][0]}
 
 
-def make_handler(me: str, replay_dir: Path):
+def _paths(players: list[str]) -> dict:
+    return {p: db.path_for(p, i == 0) for i, p in enumerate(players)}
+
+
+def make_handler(players: list[str], replay_dir: Path):
+    paths = _paths(players)
     class Handler(BaseHTTPRequestHandler):
         server_version = "BlackBox"
 
@@ -59,7 +64,7 @@ def make_handler(me: str, replay_dir: Path):
 
         def do_POST(self):
             if urlparse(self.path).path == "/api/import":
-                return self._json(start_import(me, replay_dir))
+                return self._json(start_import(players, replay_dir))
             self._json({"error": "not found"}, 404)
 
         def _static(self, path: str):
@@ -74,7 +79,9 @@ def make_handler(me: str, replay_dir: Path):
 
         def _api(self, route: str, qs: dict):
             f = _filters(qs)
-            con = db.connect()
+            me = (qs.get("player") or [None])[0]
+            me = me if me in paths else players[0]
+            con = db.connect(paths[me])
             try:
                 parts = route.split("/")
                 if route == "filters":
@@ -99,12 +106,14 @@ def make_handler(me: str, replay_dir: Path):
                     return self._json(queries.vehicles(con, f))
                 if route == "grind":
                     return self._json(queries.grind(con, f))
+                if route == "trend":
+                    return self._json(queries.trend(con, f))
                 if route == "missing":
                     return self._json(queries.missing_results(con, f))
                 if route == "import":
                     return self._json(_import_state)
                 if route == "me":
-                    return self._json({"player": me})
+                    return self._json({"player": me, "players": players})
                 return self._json({"error": "not found"}, 404)
             finally:
                 con.close()
@@ -112,14 +121,25 @@ def make_handler(me: str, replay_dir: Path):
     return Handler
 
 
-def start_import(me: str, replay_dir: Path) -> dict:
+def start_import(players: list[str], replay_dir: Path) -> dict:
+    """Imports every player profile in turn (each into its own database)."""
     if not _import_lock.acquire(blocking=False):
         return {**_import_state, "running": True}
 
     def job():
-        _import_state.update(running=True, error=None, log=[])
+        _import_state.update(running=True, error=None, log=[], last=None)
         try:
-            _import_state["last"] = importer.run_import(me, replay_dir, log=lambda m: _import_state["log"].append(m))
+            log = lambda m: _import_state["log"].append(m)
+            strict = len(players) > 1
+            for name, path in _paths(players).items():
+                if strict:
+                    log(f"[{name}]")
+                out = importer.run_import(name, replay_dir, log=log, db_path=path, strict=strict)
+                if name == players[0] or not _import_state.get("last"):
+                    _import_state["last"] = out
+                else:  # sum the "new" counters over profiles
+                    for k in ("telemetry", "replays", "results"):
+                        _import_state["last"][k] += out[k]
         except Exception as e:
             _import_state["error"] = f"{type(e).__name__}: {e}"
         finally:
@@ -145,7 +165,7 @@ def _signature(replay_dir: Path) -> tuple:
     return tuple(sig)
 
 
-def _auto_import(me: str, replay_dir: Path, interval: float = 10) -> None:
+def _auto_import(players: list[str], replay_dir: Path, interval: float = 10) -> None:
     """Imports on start and again whenever a new replay, recording or result text appears.
     Waits until the files stop changing for one interval so a replay still being written is not read."""
     last = None
@@ -155,7 +175,7 @@ def _auto_import(me: str, replay_dir: Path, interval: float = 10) -> None:
             sig = _signature(replay_dir)
             if sig != last:
                 if pending == sig or last is None:
-                    start_import(me, replay_dir)
+                    start_import(players, replay_dir)
                     last, pending = sig, None
                 else:
                     pending = sig
@@ -172,11 +192,14 @@ def _clipboard(on_saved) -> None:
     clipboard_watch.start_background(on_saved)
 
 
-def serve(me: str, replay_dir: Path, port: int = 8765, open_browser: bool = True, auto: bool = False) -> None:
+def serve(players: list[str] | str, replay_dir: Path, port: int = 8765, open_browser: bool = True,
+          auto: bool = False) -> None:
+    players = [players] if isinstance(players, str) else list(players)
     mimetypes.add_type("application/javascript", ".js")
     mimetypes.add_type("text/css", ".css")
-    db.connect().close()
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(me, replay_dir))
+    for path in _paths(players).values():
+        db.connect(path).close()
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(players, replay_dir))
     url = f"http://127.0.0.1:{port}/"
     print(f"BlackBox arayüzü: {url}   (kapatmak için Ctrl+C)")
     if auto:
@@ -184,7 +207,7 @@ def serve(me: str, replay_dir: Path, port: int = 8765, open_browser: bool = True
         if sys.platform == "win32":
             _clipboard(lambda title: print(f"[SONUÇ] kaydedildi: {title}"))
             print("Pano izleniyor: hangarda savaş sonucunu kopyaladığında otomatik kaydedilir.")
-        threading.Thread(target=_auto_import, args=(me, replay_dir), name="auto-import", daemon=True).start()
+        threading.Thread(target=_auto_import, args=(players, replay_dir), name="auto-import", daemon=True).start()
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:

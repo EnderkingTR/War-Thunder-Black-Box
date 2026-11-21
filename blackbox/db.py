@@ -7,6 +7,7 @@ the replay folder and results/. When SCHEMA_VERSION changes it is recreated.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import asdict
 from datetime import datetime
@@ -15,7 +16,7 @@ from .analyze import ANALYZER_VERSION, Match
 from .session import ROOT
 
 DB_PATH = ROOT / "blackbox.db"
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS replays (
     my_team INTEGER, my_vehicle TEXT, my_vehicle_type TEXT, my_rank INTEGER,
     my_kills INTEGER, my_ground_kills INTEGER, my_ai_kills INTEGER, my_deaths INTEGER,
     my_assists INTEGER, my_score INTEGER, my_missile_evades INTEGER, my_damage_zone INTEGER,
+    my_capture_zone INTEGER,
     lobby_pos INTEGER, team_pos INTEGER, parse_error TEXT, version INTEGER
 );
 CREATE INDEX IF NOT EXISTS replays_session ON replays(session_id);
@@ -62,6 +64,7 @@ CREATE TABLE IF NOT EXISTS replay_players (
     kills INTEGER, ground_kills INTEGER, ai_kills INTEGER, assists INTEGER, deaths INTEGER,
     score INTEGER, missile_evades INTEGER, is_me INTEGER,
     damage_zone INTEGER,  -- base-damage points from the results table (~25 per destroyed base in Air RB)
+    capture_zone INTEGER,  -- zones captured (ground)
     mode_kills INTEGER,  -- kills that count in this battle's mode: air battles air kills, ground battles air + ground
     PRIMARY KEY (session_id, idx)
 );
@@ -95,6 +98,7 @@ CREATE TABLE IF NOT EXISTS battles (
     vehicle TEXT, vehicle_type TEXT, result TEXT, kills INTEGER, ground_kills INTEGER,
     deaths INTEGER, assists INTEGER, score INTEGER, missile_evades INTEGER,
     damage_zone INTEGER, bases INTEGER, base_hits INTEGER, ground_targets INTEGER,  -- bases: exact, from result text
+    capture_zone INTEGER,
     bases_est INTEGER,  -- exact bases when known, else estimated from damage_zone with a per-aircraft ratio; NULL = unknown
     lobby_pos INTEGER,
     n_players INTEGER, team_pos INTEGER, end_s REAL, played_s INTEGER, activity INTEGER,
@@ -115,8 +119,16 @@ EVENT_COLS = ["t", "game_time", "kind", "actor", "actor_squad", "actor_vehicle",
               "target_vehicle", "extra", "me_actor", "me_target", "raw"]
 
 
-def connect() -> sqlite3.Connection:
-    con = _open()
+def path_for(player: str, primary: bool) -> Path:
+    """One database per player profile; the first (main) player keeps blackbox.db."""
+    if primary:
+        return DB_PATH
+    safe = re.sub(r"[^\w.-]", "_", player)
+    return DB_PATH.with_name(f"blackbox-{safe}.db")
+
+
+def connect(path: Path | None = None) -> sqlite3.Connection:
+    con = _open(path)
     try:
         ver = con.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
     except sqlite3.OperationalError:
@@ -136,8 +148,8 @@ def connect() -> sqlite3.Connection:
     return con
 
 
-def _open() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH)
+def _open(path: Path | None = None) -> sqlite3.Connection:
+    con = sqlite3.connect(path or DB_PATH)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     return con

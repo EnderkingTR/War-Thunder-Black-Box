@@ -90,6 +90,18 @@ class QueriesSmokeTest(unittest.TestCase):
         self.assertEqual(queries.missing_results(con, f), [])
         self.assertEqual(queries.vehicles(con, f), [])
         self.assertIsNone(queries.summary(con, f)["totals"]["rp_min"])
+        self.assertEqual(queries.trend(con, f)["points"], [])
+        self.assertEqual(queries.ground_vehicles(con, {"type": "ground"}), [])
+
+
+class ProfileTest(unittest.TestCase):
+    def test_db_paths(self):
+        from blackbox import db
+        self.assertEqual(db.path_for("ENDERKING_tr", True), db.DB_PATH)
+        self.assertEqual(db.path_for("Kardeş Adı", False).name, "blackbox-Kardeş_Adı.db")
+
+    def test_multipath_threshold(self):
+        self.assertEqual(skills.LOW_RADIO_ALT_M, 60)
 
 
 if __name__ == "__main__":

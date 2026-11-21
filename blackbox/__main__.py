@@ -1,6 +1,8 @@
 """War Thunder BlackBox - komut satırı.
 
     python -m blackbox setup ENDERKING_tr       oyuncu adını kaydet
+    python -m blackbox setup KardesAdi --add    ikinci oyuncu profili ekle (aynı bilgisayarda oynayan)
+    python -m blackbox --player KardesAdi stats  komutları o oyuncunun verisiyle çalıştır
     python -m blackbox import [--force]         telemetri + replay + sonuç metinlerini işle
     python -m blackbox add-results <dosya>      kopyalanmış sonuç metinlerini içeren dosyayı ekle
     python -m blackbox stats [filtreler]        genel istatistikler
@@ -35,11 +37,24 @@ def load_config() -> dict:
     return {}
 
 
+_selected: str | None = None  # --player
+
+
+def players() -> list[str]:
+    cfg = load_config()
+    out = [cfg["player_name"]] if cfg.get("player_name") else []
+    return out + [p for p in cfg.get("players", []) if p not in out]
+
+
 def require_player() -> str:
-    name = load_config().get("player_name")
-    if not name:
+    ps = players()
+    if not ps:
         sys.exit("Önce oyuncu adını kaydet:  python -m blackbox setup <oyun_içi_adın>")
-    return name
+    if _selected:
+        if _selected not in ps:
+            sys.exit(f"Profil yok: {_selected}. Kayıtlı oyuncular: {', '.join(ps)}")
+        return _selected
+    return ps[0]
 
 
 # ---------------------------------------------------------------- helpers
@@ -112,7 +127,10 @@ def section(title):
 # ---------------------------------------------------------------- commands
 def cmd_setup(args):
     cfg = load_config()
-    cfg["player_name"] = args.name
+    if args.add and cfg.get("player_name"):
+        cfg["players"] = [p for p in cfg.get("players", []) if p != args.name] + [args.name]
+    else:
+        cfg["player_name"] = args.name
     if args.replay_dir:
         cfg["replay_dir"] = args.replay_dir
     CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -123,7 +141,8 @@ def cmd_import(args):
     me = require_player()
     replay_dir = Path(load_config().get("replay_dir") or importer.DEFAULT_REPLAY_DIR)
     print("İçe aktarılıyor...")
-    out = importer.run_import(me, replay_dir, args.force)
+    ps = players()
+    out = importer.run_import(me, replay_dir, args.force, db_path=db.path_for(me, me == ps[0]), strict=len(ps) > 1)
     print(f"Telemetri: {out['telemetry']} yeni   Replay: {out['replays']} yeni   "
           f"Sonuç metni: {out['results']} yeni   Toplam maç: {out['battles']}")
 
@@ -350,7 +369,7 @@ def cmd_web(args):
     from . import web
     me = require_player()
     replay_dir = Path(load_config().get("replay_dir") or importer.DEFAULT_REPLAY_DIR)
-    web.serve(me, replay_dir, port=args.port, open_browser=not args.no_browser)
+    web.serve(players(), replay_dir, port=args.port, open_browser=not args.no_browser)
 
 
 def cmd_start(args):
@@ -363,7 +382,7 @@ def cmd_start(args):
     if not args.no_recorder:
         rec = subprocess.Popen([sys.executable, str(ROOT / "recorder" / "record.py"), "--no-clipboard"], cwd=ROOT)
     try:
-        web.serve(me, replay_dir, port=args.port, open_browser=not args.no_browser, auto=True)
+        web.serve(players(), replay_dir, port=args.port, open_browser=not args.no_browser, auto=True)
     finally:
         if rec and rec.poll() is None:
             try:
@@ -387,6 +406,7 @@ def main():
         sys.stderr.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(prog="python -m blackbox", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--player", help="oyuncu profili (setup --add ile eklenen)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def filters(sp):
@@ -397,7 +417,8 @@ def main():
         sp.add_argument("--type", choices=["air", "ground", "all"], default="air",
                         help="hava (varsayılan), kara veya hepsi")
 
-    sp = sub.add_parser("setup"); sp.add_argument("name"); sp.add_argument("--replay-dir"); sp.set_defaults(f=cmd_setup)
+    sp = sub.add_parser("setup"); sp.add_argument("name"); sp.add_argument("--replay-dir")
+    sp.add_argument("--add", action="store_true", help="ek oyuncu profili olarak ekle"); sp.set_defaults(f=cmd_setup)
     sp = sub.add_parser("import"); sp.add_argument("--force", action="store_true"); sp.set_defaults(f=cmd_import)
     sp = sub.add_parser("add-results"); sp.add_argument("file"); sp.set_defaults(f=cmd_add_results)
     sp = sub.add_parser("stats"); filters(sp); sp.set_defaults(f=cmd_stats)
@@ -413,6 +434,12 @@ def main():
     sp.add_argument("--no-browser", action="store_true"); sp.add_argument("--no-recorder", action="store_true")
     sp.set_defaults(f=cmd_start)
     args = ap.parse_args()
+    global _selected
+    _selected = args.player
+    if args.player:
+        ps = players()
+        require_player()
+        db.DB_PATH = db.path_for(args.player, args.player == ps[0])
     args.f(args)
 
 

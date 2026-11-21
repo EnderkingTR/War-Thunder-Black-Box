@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from . import killfeed, skills
 from .session import Session
 
-ANALYZER_VERSION = 4
+ANALYZER_VERSION = 5
 NOT_SPAWNED_TYPES = {"dummy_plane", ""}
 KILL_KINDS = {"kill", "destroy"}
 DAMAGE_KINDS = {"crit", "severe", "fire", "hit", "kill", "destroy"}
