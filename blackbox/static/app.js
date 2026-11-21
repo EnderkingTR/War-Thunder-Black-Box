@@ -840,7 +840,7 @@ async function runImport() {
   btn.disabled = true;
   btn.textContent = "Aktarılıyor…";
   try {
-    await fetch("/api/import", { method: "POST" });
+    await fetch("/api/import", { method: "POST", headers: { "X-BlackBox": "1" } });
     let st;
     do {
       await new Promise((r) => setTimeout(r, 700));
@@ -876,6 +876,14 @@ async function watchImports() {
     if (!st.running) importSeq = st.seq;
   } catch (e) { /* server restarting */ }
   setTimeout(watchImports, 8000);
+}
+
+async function quitApp() {
+  if (!confirm("BlackBox kapatılsın mı? Telemetri kaydı ve otomatik içe aktarma da durur.")) return;
+  try { await fetch("/api/quit", { method: "POST", headers: { "X-BlackBox": "1" } }); } catch { /* already down */ }
+  document.body.innerHTML = `<div class="closed"><span class="brand-mark"></span><h1>BlackBox kapatıldı</h1>
+    <p>Kayıt durdu. Yeniden başlatmak için masaüstündeki BlackBox kısayoluna ya da BlackBox.bat'a çift tıkla.</p>
+    <p class="dim">Bu sekmeyi kapatabilirsin.</p></div>`;
 }
 
 function toast(msg) {
@@ -919,6 +927,7 @@ async function route() {
   setTheme(document.documentElement.dataset.theme || "paper");
   $$(".themes button").forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.themeSet)));
   $("#importBtn").addEventListener("click", runImport);
+  $("#quitBtn").addEventListener("click", quitApp);
   bindFilters();
   try {
     const me = await api("me");

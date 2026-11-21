@@ -13,6 +13,7 @@
     python -m blackbox unknown                  tanınmayan kill feed satırları
     python -m blackbox web                      web arayüzünü aç (http://127.0.0.1:8765)
     python -m blackbox start                    hepsi bir arada: kaydedici + pano + otomatik içe aktarma + arayüz
+    python -m blackbox shortcut [--console]     masaüstüne BlackBox kısayolu (varsayılan: pencere açmadan çalışır)
 
 Filtreler: --vehicle fa_18c  --map İspanya  --last 20  --since 2026-11-01  --type air|ground|all
 """
@@ -375,20 +376,57 @@ def cmd_web(args):
 def cmd_start(args):
     """Recorder (8111 telemetry) in a child process, web UI with clipboard watcher and auto import here."""
     import subprocess
+    import webbrowser
     from . import web
-    me = require_player()
+    require_player()
     replay_dir = Path(load_config().get("replay_dir") or importer.DEFAULT_REPLAY_DIR)
+    if web.already_running(args.port):
+        # second double-click: BlackBox is already running, just show it
+        print("BlackBox zaten çalışıyor; arayüz açılıyor.")
+        if not args.no_browser:
+            webbrowser.open(f"http://127.0.0.1:{args.port}/")
+        return
     rec = None
     if not args.no_recorder:
-        rec = subprocess.Popen([sys.executable, str(ROOT / "recorder" / "record.py"), "--no-clipboard"], cwd=ROOT)
+        out = sys.stdout if _LOG is None else _LOG
+        rec = subprocess.Popen([sys.executable, str(ROOT / "recorder" / "record.py"), "--no-clipboard", "--stop-on-eof"],
+                               cwd=ROOT, stdin=subprocess.PIPE, stdout=out, stderr=out)
     try:
         web.serve(players(), replay_dir, port=args.port, open_browser=not args.no_browser, auto=True)
     finally:
         if rec and rec.poll() is None:
             try:
-                rec.wait(timeout=5)  # Ctrl+C reaches the recorder too; let it save the running match
-            except subprocess.TimeoutExpired:
+                rec.stdin.close()  # asks the recorder to stop; it saves a match in progress first
+                rec.wait(timeout=15)
+            except (OSError, subprocess.TimeoutExpired):
                 rec.terminate()
+
+
+def cmd_shortcut(args):
+    """Desktop shortcut with the BlackBox icon. Default: pythonw (no console window); --console: BlackBox.bat."""
+    import subprocess
+    if sys.platform != "win32":
+        sys.exit("Kısayol yalnızca Windows'ta oluşturulur.")
+    exe = Path(sys.executable)
+    pythonw = exe.with_name("pythonw.exe")
+    if args.console or not pythonw.exists():
+        target, arguments = ROOT / "BlackBox.bat", ""
+    else:
+        target, arguments = pythonw, "-m blackbox start"
+    env = {**__import__("os").environ, "BB_TARGET": str(target), "BB_ARGS": arguments, "BB_DIR": str(ROOT),
+           "BB_ICON": str(ROOT / "BlackBox.ico"), "BB_NAME": args.name}
+    ps = ("$d = [Environment]::GetFolderPath('Desktop'); "
+          "$l = Join-Path $d ($env:BB_NAME + '.lnk'); "
+          "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($l); "
+          "$s.TargetPath = $env:BB_TARGET; $s.Arguments = $env:BB_ARGS; $s.WorkingDirectory = $env:BB_DIR; "
+          "$s.IconLocation = $env:BB_ICON + ',0'; $s.Description = 'War Thunder BlackBox'; $s.Save(); $l")
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                       env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode:
+        sys.exit(f"Kısayol oluşturulamadı: {r.stderr.strip()}")
+    print(f"Kısayol oluşturuldu: {r.stdout.strip()}")
+    print("Pencere açmadan çalışır; kapatmak için arayüzde sağ üstteki Kapat." if not args.console
+          else "Konsol penceresiyle çalışır; kapatmak için pencerede Ctrl+C.")
 
 
 def cmd_unknown(args):
@@ -400,8 +438,16 @@ def cmd_unknown(args):
         print(f"{r['n']:>4}  {r['raw']}")
 
 
+_LOG = None  # log file when running without a console (pythonw)
+
+
 def main():
-    if sys.platform == "win32":
+    global _LOG
+    if sys.stdout is None or sys.stderr is None:
+        # pythonw (hidden window): keep a log next to the project for troubleshooting
+        _LOG = open(ROOT / "blackbox.log", "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = _LOG
+    elif sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(prog="python -m blackbox", description=__doc__,
@@ -433,6 +479,8 @@ def main():
     sp = sub.add_parser("start"); sp.add_argument("--port", type=int, default=8765)
     sp.add_argument("--no-browser", action="store_true"); sp.add_argument("--no-recorder", action="store_true")
     sp.set_defaults(f=cmd_start)
+    sp = sub.add_parser("shortcut"); sp.add_argument("--console", action="store_true", help="konsol penceresiyle")
+    sp.add_argument("--name", default="BlackBox"); sp.set_defaults(f=cmd_shortcut)
     args = ap.parse_args()
     global _selected
     _selected = args.player

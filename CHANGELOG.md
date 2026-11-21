@@ -4,6 +4,19 @@ Bu projedeki önemli değişiklikler bu dosyada tutulur. Biçim [Keep a Changelo
 esaslıdır; sürüm numaraları [Anlamsal Sürümleme](https://semver.org/lang/tr/) kurallarını izler.
 1.0'dan önceki sürümler geriye dönük olarak commit geçmişinden çıkarılmıştır.
 
+## [0.11.0] - 2026-11-22
+
+### Eklendi
+- `python -m blackbox shortcut`: BlackBox simgeli masaüstü kısayolu; konsol penceresi açmadan çalışır
+  (`--console` ile pencereli). Arka planda çıktılar `blackbox.log` dosyasına yazılır.
+- Arayüzde **Kapat** düğmesi: kaydediciyi güvenle durdurur (o an kaydedilen maç önce kaydedilir) ve sunucuyu kapatır.
+- Tek örnek: BlackBox zaten açıkken yeniden başlatılırsa ikinci kopya açılmaz, mevcut arayüz gösterilir.
+- Uygulama simgesi (`BlackBox.ico`) ve tarayıcı sekmesi simgesi.
+
+### Güvenlik
+- Arayüzün değişiklik yapan istekleri (içe aktarma, kapatma) özel bir başlık ister; başka web siteleri bu
+  istekleri tetikleyemez.
+
 ## [0.10.1] - 2026-11-22
 
 ### Eklendi
@@ -110,7 +123,8 @@ esaslıdır; sürüm numaraları [Anlamsal Sürümleme](https://semver.org/lang/
 - Oyunun yerel 8111 arayüzünü maç boyunca kaydeden telemetri kaydedici ve oturum inceleyici.
 - Oyunsuz test için sahte 8111 sunucusu.
 
-[0.10.1]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/249b1bf...HEAD
+[0.11.0]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/249b1bf...v0.10.1
 [0.10.0]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/440275e...249b1bf
 [0.9.0]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/b44fd23...440275e
 [0.8.0]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/0bcae68...b44fd23

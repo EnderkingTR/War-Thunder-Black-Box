@@ -1,6 +1,7 @@
 recordings/
 blackbox.db
 blackbox-*.db
+blackbox.log
 config.json
 results/
 Mac_Sonuclari.txt

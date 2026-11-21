@@ -63,8 +63,17 @@ def make_handler(players: list[str], replay_dir: Path):
                 self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 
         def do_POST(self):
-            if urlparse(self.path).path == "/api/import":
+            # a custom header cannot be sent cross-site without a CORS preflight (which we never answer),
+            # so other web pages cannot trigger imports or shut the app down
+            if self.headers.get("X-BlackBox") != "1":
+                return self._json({"error": "forbidden"}, 403)
+            path = urlparse(self.path).path
+            if path == "/api/import":
                 return self._json(start_import(players, replay_dir))
+            if path == "/api/quit":
+                self._json({"ok": True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
             self._json({"error": "not found"}, 404)
 
         def _static(self, path: str):
@@ -192,6 +201,16 @@ def _clipboard(on_saved) -> None:
     clipboard_watch.start_background(on_saved)
 
 
+def already_running(port: int) -> bool:
+    """Is a BlackBox server already answering on this port? (Windows lets two sockets bind the same port.)"""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def serve(players: list[str] | str, replay_dir: Path, port: int = 8765, open_browser: bool = True,
           auto: bool = False) -> None:
     players = [players] if isinstance(players, str) else list(players)
@@ -201,7 +220,7 @@ def serve(players: list[str] | str, replay_dir: Path, port: int = 8765, open_bro
         db.connect(path).close()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(players, replay_dir))
     url = f"http://127.0.0.1:{port}/"
-    print(f"BlackBox arayüzü: {url}   (kapatmak için Ctrl+C)")
+    print(f"BlackBox arayüzü: {url}   (kapatmak için Ctrl+C ya da arayüzde Kapat)")
     if auto:
         _import_state["auto"] = True
         if sys.platform == "win32":

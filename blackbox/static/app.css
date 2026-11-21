@@ -398,3 +398,11 @@ svg.chart .grid-label { font-family: var(--font-ui); font-size: 9px; fill: var(-
 .trend-line { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .trend-dot { fill: var(--accent); }
 .player-sel { font: inherit; font-family: var(--font-num); font-size: 12px; color: var(--ink); background: transparent; border: 1px solid var(--rule); padding: 3px 6px; }
+
+/* quit */
+.btn.ghost { background: transparent; color: var(--ink-2); border: 1px solid var(--rule); }
+.btn.ghost:hover { color: var(--ink); border-color: var(--ink-3); }
+.closed { max-width: 520px; margin: 18vh auto; padding: 0 16px; text-align: center; }
+.closed h1 { font-weight: 800; font-stretch: 125%; letter-spacing: 0.02em; margin: 18px 0 10px; }
+.closed .brand-mark { display: inline-block; width: 36px; height: 36px; }
+.closed .brand-mark::after { left: 8px; right: 8px; top: 16px; height: 4px; }

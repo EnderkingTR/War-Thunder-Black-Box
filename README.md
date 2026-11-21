@@ -8,7 +8,7 @@
 ![Bağımlılık](https://img.shields.io/badge/ba%C4%9F%C4%B1ml%C4%B1l%C4%B1k-yok%20(stdlib)-2ea44f)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![Lisans](https://img.shields.io/badge/lisans-MIT-blue)
-![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-0.10.1-orange)
+![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-0.11.0-orange)
 
 [Özellikler](#özellikler) · [Ekran görüntüleri](#ekran-görüntüleri) · [Kurulum](#kurulum) · [Kullanım](#kullanım) ·
 [Nasıl çalışır](#nasıl-çalışır) · [Analiz yöntemleri](#analiz-yöntemleri) · [Değişiklik günlüğü](CHANGELOG.md)
@@ -84,10 +84,18 @@ gelişmediğin. Öncelik hava muharebeleri (Air RB); kara muharebeleri de destek
 
 ### Tek tıkla (önerilen)
 
-Oynamadan önce **`BlackBox.bat`**'a çift tıkla (masaüstüne kısayol için: sağ tık → Gönder → Masaüstü).
-Tarayıcıda `http://127.0.0.1:8765` açılır. Oyna; her maçtan sonra hangardaki savaş sonucu bildiriminde
-**kopyala**'ya bas. Gerisi otomatik: maç, replay ve sonuç metni birkaç saniye içinde arayüze düşer.
-Kapatmak için pencerede `Ctrl+C`. Komutla aynısı: `python -m blackbox start`.
+Bir kez masaüstü kısayolunu oluştur:
+```powershell
+python -m blackbox shortcut
+```
+Masaüstündeki **BlackBox** simgesine çift tıkla: konsol penceresi açılmadan arka planda çalışır ve tarayıcıda
+`http://127.0.0.1:8765` açılır. Oyna; her maçtan sonra hangardaki savaş sonucu bildiriminde **kopyala**'ya bas.
+Gerisi otomatik: maç, replay ve sonuç metni birkaç saniye içinde arayüze düşer. Simgeye yeniden tıklarsan ikinci
+bir kopya başlamaz, açık olan arayüz gelir. Kapatmak için arayüzde sağ üstteki **Kapat** (o an kaydedilen maç
+önce kaydedilir). Arka planda çalışırken çıktılar `blackbox.log` dosyasına yazılır.
+
+Konsol penceresini görmek istersen `BlackBox.bat`'ı kullan (ya da `python -m blackbox shortcut --console`);
+orada `Ctrl+C` ile kapanır. Komutla aynısı: `python -m blackbox start`.
 
 ### Birden fazla oyuncu (aynı bilgisayar)
 
@@ -111,6 +119,7 @@ python -m blackbox web             # yalnızca web arayüzü (--port 9000, --no-
 |---|---|
 | `setup <ad> [--add] [--replay-dir]` | Oyuncu adını (veya ek profili) kaydeder |
 | `start [--no-recorder] [--no-browser]` | Hepsi bir arada: kaydedici, pano, otomatik içe aktarma, arayüz |
+| `shortcut [--console]` | Masaüstüne BlackBox kısayolu (varsayılan: pencere açmadan) |
 | `import [--force]` | Telemetri, replay ve sonuç metinlerini işler |
 | `web` | Web arayüzü |
 | `stats` | Genel istatistikler, lobi kıyası, grind, silahlar |
@@ -164,7 +173,7 @@ Veritabanı türetilmiş veridir: silinse bile `import` ile yeniden oluşur.
 ## Proje yapısı
 
 ```
-BlackBox.bat              tek tıkla başlatıcı
+BlackBox.bat, BlackBox.ico  konsollu başlatıcı ve simge
 blackbox/
   __main__.py             komut satırı
   importer.py             telemetri + replay + sonuç metni -> battles
@@ -178,6 +187,7 @@ recorder/
   record.py               8111 telemetri kaydedici
   clipboard_watch.py      sonuç metni pano izleyici
 dev/fake_wt_server.py     oyunsuz test için sahte 8111 sunucusu
+dev/make_icon.py          simgeyi üretir
 tests/                    birim testleri
 ```
 

@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="icon" href="/favicon.ico">
 <link rel="stylesheet" href="/app.css">
 <script>
   try { document.documentElement.dataset.theme = localStorage.getItem("bb-theme") || "paper"; } catch (e) {}
@@ -31,6 +32,7 @@
   <div class="top-right">
     <span class="pilot" id="pilot"></span>
     <button class="btn" id="importBtn" type="button">İçe aktar</button>
+    <button class="btn ghost" id="quitBtn" type="button" title="BlackBox'u kapat (kayıt da durur)">Kapat</button>
     <div class="themes" role="radiogroup" aria-label="Renk teması">
       <button type="button" data-theme-set="paper" title="Kâğıt" aria-label="Kâğıt teması"></button>
       <button type="button" data-theme-set="graphite" title="Grafit" aria-label="Grafit teması"></button>

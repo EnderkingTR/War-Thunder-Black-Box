@@ -218,6 +218,21 @@ def in_match() -> bool | None:
     return bool(isinstance(info, dict) and info.get("valid"))
 
 
+STOP = threading.Event()
+
+
+def _stop_on_eof() -> None:
+    """Started by BlackBox (hidden window): the parent closes our stdin to ask for a clean stop."""
+    def wait():
+        try:
+            while sys.stdin.buffer.read(1024):
+                pass
+        except (OSError, ValueError, AttributeError):
+            pass
+        STOP.set()
+    threading.Thread(target=wait, name="stdin-eof", daemon=True).start()
+
+
 def run(clipboard: bool = True) -> None:
     print(f"BlackBox recorder - recordings go to {RECORDINGS_DIR}")
     if clipboard and sys.platform == "win32":
@@ -231,6 +246,8 @@ def run(clipboard: bool = True) -> None:
     last_print = 0.0
     try:
         while True:
+            if STOP.is_set():
+                raise KeyboardInterrupt
             state = in_match()
             now = time.monotonic()
             if state and session is None:
@@ -300,8 +317,11 @@ if __name__ == "__main__":
     parser.add_argument("--probe", action="store_true", help="fetch every endpoint once and exit")
     parser.add_argument("--url", default=BASE_URL, help="API base URL (default %(default)s)")
     parser.add_argument("--no-clipboard", action="store_true", help="do not watch the clipboard for battle results")
+    parser.add_argument("--stop-on-eof", action="store_true", help="stop cleanly when stdin closes (used by BlackBox)")
     args = parser.parse_args()
+    if args.stop_on_eof:
+        _stop_on_eof()
     BASE_URL = args.url.rstrip("/")
-    if sys.platform == "win32":
+    if sys.platform == "win32" and sys.stdout is not None:
         sys.stdout.reconfigure(encoding="utf-8")
     probe() if args.probe else run(clipboard=not args.no_clipboard)
