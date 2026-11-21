@@ -1,4 +1,6 @@
 recordings/
+blackbox.db
+config.json
 __pycache__/
 *.pyc
 .venv/
