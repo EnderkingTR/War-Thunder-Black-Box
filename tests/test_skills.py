@@ -54,5 +54,27 @@ class GroundTest(unittest.TestCase):
             self.assertEqual(skills.ground_ammo_class(w), cls, w)
 
 
+class BasesTest(unittest.TestCase):
+    def _bases(self, per_match):
+        split = {"with": {"n": 5, "rp": 9000, "sl": 18000}, "without": {"n": 5, "rp": 3000, "sl": 4000}}
+        return {"n": 10, "bases": round(per_match * 10), "with_bases": 5, "share": 0.5, "per_match": per_match,
+                "split": split}
+
+    def test_low_kd_with_bases_is_a_note(self):
+        from blackbox.queries import _findings
+        lob = {"my_k": 4, "my_d": 10, "l_k": 8, "l_d": 10, "n": 10}
+        out = _findings([], None, None, lob, [], {"n": 0}, self._bases(0.9))
+        kd = [f for f in out if f["title"].startswith("K/D")]
+        self.assertEqual(kd[0]["kind"], "note")
+        self.assertTrue(any(f["title"] == "Üs bombalamada güçlüsün" for f in out))
+        self.assertTrue(any("grind" in f["title"] for f in out))
+
+    def test_low_kd_without_bases_is_weak(self):
+        from blackbox.queries import _findings
+        lob = {"my_k": 4, "my_d": 10, "l_k": 8, "l_d": 10, "n": 10}
+        out = _findings([], None, None, lob, [], {"n": 0}, None)
+        self.assertEqual([f["kind"] for f in out if f["title"].startswith("K/D")], ["weak"])
+
+
 if __name__ == "__main__":
     unittest.main()

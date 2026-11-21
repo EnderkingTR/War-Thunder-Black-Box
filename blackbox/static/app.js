@@ -231,6 +231,7 @@ async function pageSummary(view) {
       { label: "Maç", value: num(t.n), sub: `${t.w || 0} Z · ${t.l || 0} Y · ${t.n - known} ?` },
       { label: "Kazanma oranı", value: known ? Math.round((100 * t.w) / known) : "–", unit: known ? "%" : "", sub: `${known} sonucu bilinen maçta` },
       { label: "K/D", value: ratio(t.k || 0, t.d), sub: `${t.k || 0} kill · ${t.d || 0} ölüm`, hl: true },
+      ...(ground || !t.nbases ? [] : [{ label: "Üs / maç", value: num((t.bases || 0) / t.nbases, 1), sub: `${t.bases || 0} üs · ${t.nbase_battles || 0} maçta`, hl: true }]),
       { label: "Ortalama skor", value: num(t.score), sub: `asist ${t.a || 0}` },
       { label: "Lobi dilimi", value: lobbyPct, sub: "0 = lobinin en iyisi" },
       ground
@@ -240,7 +241,7 @@ async function pageSummary(view) {
       { label: "RP / maç", value: num(t.rp), sub: t.nres ? `${t.nres} maçtan` : "sonuç metni yok" },
     ])}</section>
     ${panel("Son maçlar", formStrip(s.form), { cls: "c12", aside: `son ${s.form.length}`, flush: true })}
-    ${sk ? panel("Güçlü ve zayıf yönler", findingList(sk.findings.slice(0, 4), { compact: true }), { cls: "c12", aside: `<a href="#/beceri">tüm analiz →</a>` }) : ""}
+    ${sk ? panel("Güçlü ve zayıf yönler", findingList(topFindings(sk.findings), { compact: true }), { cls: "c12", aside: `<a href="#/beceri">tüm analiz →</a>` }) : ""}
     ${panel("Lobiyle kıyas", compareTable(s.lobby, s.kind) + `<p class="note">Aynı maçlardaki diğer ${Math.round(s.lobby.others || 0)} oyuncuya göre (maç başına ortalama). Lobi ortalaması iki takımı da kapsar.${ground ? " Kill = kara + hava." : ""}</p>`, { cls: "c7" })}
     ${panel("Ne zaman ölüyorsun", columnChart(s.death_timing.map((d) => ({ label: d.label, v: d.n, tip: `${d.label}. dakika: ${d.n} ölüm` })), { cls: "acc" }) + '<p class="note">Maç başından itibaren dakika. Replay verisinden.</p>', { cls: "c5" })}
     ${panel("Seni düşüren silahlar", barList(s.death_weapons, { cls: "loss" }), { cls: "c6", aside: '<a href="#/silahlar">tümü →</a>' })}
@@ -258,6 +259,18 @@ async function pageSummary(view) {
   mountTable($("#recentT", view), battleCols(), s.recent, { key: "session_id", onRow: (k) => (location.hash = `#/mac/${k}`) });
 }
 
+// main page: the two most important weak points and the two most important strengths (notes fill gaps)
+function topFindings(fs) {
+  const weak = fs.filter((f) => f.kind === "weak").slice(0, 2);
+  const good = fs.filter((f) => f.kind !== "weak").slice(0, 4 - weak.length);
+  return [...weak, ...good].slice(0, 4);
+}
+
+function basesCell(r) {
+  if (r.bases_est == null) return '<span class="dim">–</span>';
+  return r.has_result ? `${r.bases_est}` : `<span class="dim" title="Sonuç metni yok: üs hasarından tahmin">≈</span>${r.bases_est}`;
+}
+
 function battleCols() {
   const ground = state.filters.type === "ground";
   return [
@@ -267,6 +280,7 @@ function battleCols() {
     { h: "Sonuç", k: "result", f: (r) => resultTag(r.result) },
     { h: "K", k: "kills", n: true, f: (r) => r.kills ?? "–" },
     { h: "Ö", k: "deaths", n: true, f: (r) => r.deaths ?? "–" },
+    ...(ground ? [] : [{ h: "Üs", k: "bases_est", n: true, f: basesCell }]),
     { h: "Skor", k: "score", n: true, f: (r) => num(r.score) },
     { h: "Lobi", k: "lobby_pos", n: true, f: (r) => (r.lobby_pos ? `${r.lobby_pos}<span class="dim">/${r.n_players}</span>` : "–") },
     ...(ground ? [] : [{ h: "Kaçış", k: "missile_evades", n: true, f: (r) => r.missile_evades ?? "–" }]),
@@ -351,6 +365,7 @@ async function pageSkills(view) {
   view.innerHTML = `<div class="page-title"><h1>Beceri</h1><span class="meta">Tahmini analiz · ${lob.n || 0} replay · ${e.n} telemetrili uçuş</span></div>
   <div class="grid">
     ${panel("Güçlü ve zayıf yönler", findingList(s.findings), { cls: "c12", aside: "lobiyle kıyas + uçuş verisi" })}
+    ${basesPanel(s.bases)}
     <section class="panel c12">${kpis([
       { label: "Füzeden kaçış / maç", value: num(lob.my_ev, 2), sub: `lobi ${num(lob.l_ev, 2)}`, hl: lob.my_ev > lob.l_ev },
       { label: "K/D", value: lob.my_d ? num(lob.my_k / lob.my_d, 2) : "–", sub: `lobi ${lob.l_d ? num(lob.l_k / lob.l_d, 2) : "–"}` },
@@ -385,6 +400,22 @@ async function pageSkills(view) {
     { h: "Görülen", k: "style", cls: "dim wrap" },
     { h: "Değerlendirme", k: "verdict", f: (r) => `<span class="tag ${VERDICT[r.verdict][1]}">${VERDICT[r.verdict][0]}</span>` },
   ], s.defense, { key: "session_id", sortKey: "started", onRow: (k) => (location.hash = `#/mac/${k}`) });
+}
+
+function basesPanel(b) {
+  if (!b || !b.n) return "";
+  const w = b.split.with, wo = b.split.without;
+  const row = (label, r) => (r ? `<tr><td>${label}</td><td class="n">${r.n}</td><td class="n">${num(r.rp)}</td><td class="n">${num(r.sl)}</td><td class="n">${num(r.score)}</td><td class="n">${num(r.kills, 2)}</td></tr>` : "");
+  return panel("Üs bombalama", kpis([
+    { label: "Üs / maç", value: num(b.per_match, 2), sub: `toplam ${b.bases || 0} üs`, hl: true },
+    { label: "Üs aldığın maç", value: num(100 * (b.share || 0)), unit: "%", sub: `${b.with_bases || 0} / ${b.n} maç` },
+    { label: "En çok üs", value: b.best ?? "–", sub: "tek maçta" },
+    { label: "Etki / maç", value: num(b.impact, 2), sub: "hava kill + üs" },
+  ]) + (w || wo ? `<table class="data"><thead><tr><th>Sonuç metni olan maçlar</th><th class="n">Maç</th><th class="n">RP</th><th class="n">SL</th><th class="n">Skor</th><th class="n">Kill</th></tr></thead><tbody>
+      ${row("Üs aldığın", w)}${row("Üs almadığın", wo)}</tbody></table>` : "") +
+    `<p class="note">Üs, ton hasarına göre değil <b>alınan üs sayısına</b> göre sayılır. Sayı sonuç metnindeki "Yok edilen üsler" satırlarından gelir.
+    Sonuç metni olmayan maçlarda (≈) o uçakla verdiğin üs hasarının sonuç metinli maçlardaki üs başına ortalamasıyla tahmin edilir. Hiç sonuç metni olmayan uçaklar tahmin edilmez.
+    Lobideki diğer oyuncuların üs sayısı replay'de kayıtlı değil; bu yüzden lobi kıyası yapılmaz.</p>`, { cls: "c12", aside: `${b.exact || 0} kesin · ${(b.n || 0) - (b.exact || 0)} tahmini maç` });
 }
 
 function pageSkillsGround(view, s) {
@@ -566,7 +597,9 @@ async function pageBattle(view, sid) {
     <section class="panel c12">${kpis([
       { label: "Kill", value: b.kills ?? "–", hl: true }, { label: "Ölüm", value: b.deaths ?? "–" }, { label: "Asist", value: b.assists ?? "–" },
       { label: "Skor", value: num(b.score) }, { label: "Lobi sırası", value: b.lobby_pos ?? "–", unit: b.n_players ? `/${b.n_players}` : "" },
-      { label: "Takım sırası", value: b.team_pos ?? "–" }, { label: "Füzeden kaçış", value: b.missile_evades ?? "–" },
+      { label: "Takım sırası", value: b.team_pos ?? "–" },
+      ...(b.kind === "ground" ? [] : [{ label: "Üs", value: b.bases_est ?? "–", unit: b.bases_est != null && !b.has_result ? " ≈" : "", sub: b.has_result ? `${b.base_hits || 0} üs isabeti` : "üs hasarından tahmin" },
+        { label: "Füzeden kaçış", value: b.missile_evades ?? "–" }]),
       { label: "Net SL", value: num(b.total_sl) }, { label: "RP", value: num(b.total_rp) },
     ])}</section>
     ${panel("Maç akışı", timeline(d.kills, end, myTeam, d.players), { cls: "c12", aside: "tüm lobideki kill'ler" })}

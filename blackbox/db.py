@@ -15,7 +15,7 @@ from .analyze import ANALYZER_VERSION, Match
 from .session import ROOT
 
 DB_PATH = ROOT / "blackbox.db"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS replays (
     level_settings TEXT, started TEXT, end_s REAL, n_players INTEGER, my_idx INTEGER,
     my_team INTEGER, my_vehicle TEXT, my_vehicle_type TEXT, my_rank INTEGER,
     my_kills INTEGER, my_ground_kills INTEGER, my_ai_kills INTEGER, my_deaths INTEGER,
-    my_assists INTEGER, my_score INTEGER, my_missile_evades INTEGER,
+    my_assists INTEGER, my_score INTEGER, my_missile_evades INTEGER, my_damage_zone INTEGER,
     lobby_pos INTEGER, team_pos INTEGER, parse_error TEXT, version INTEGER
 );
 CREATE INDEX IF NOT EXISTS replays_session ON replays(session_id);
@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS replay_players (
     vehicle TEXT, vehicle_type TEXT, mrank INTEGER, country TEXT, platform TEXT,
     kills INTEGER, ground_kills INTEGER, ai_kills INTEGER, assists INTEGER, deaths INTEGER,
     score INTEGER, missile_evades INTEGER, is_me INTEGER,
+    damage_zone INTEGER,  -- base-damage points from the results table (~25 per destroyed base in Air RB)
     mode_kills INTEGER,  -- kills that count in this battle's mode: air battles air kills, ground battles air + ground
     PRIMARY KEY (session_id, idx)
 );
@@ -92,7 +93,10 @@ CREATE TABLE IF NOT EXISTS battles (
     session_id TEXT PRIMARY KEY, started TEXT, map_id TEXT, map TEXT, mode TEXT, battle_class TEXT, kind TEXT,
     air_kills INTEGER,
     vehicle TEXT, vehicle_type TEXT, result TEXT, kills INTEGER, ground_kills INTEGER,
-    deaths INTEGER, assists INTEGER, score INTEGER, missile_evades INTEGER, lobby_pos INTEGER,
+    deaths INTEGER, assists INTEGER, score INTEGER, missile_evades INTEGER,
+    damage_zone INTEGER, bases INTEGER, base_hits INTEGER, ground_targets INTEGER,  -- bases: exact, from result text
+    bases_est INTEGER,  -- exact bases when known, else estimated from damage_zone with a per-aircraft ratio; NULL = unknown
+    lobby_pos INTEGER,
     n_players INTEGER, team_pos INTEGER, end_s REAL, played_s INTEGER, activity INTEGER,
     total_sl INTEGER, total_rp INTEGER, earned_sl INTEGER, repair_sl INTEGER, match_id TEXT,
     has_replay INTEGER, has_result INTEGER, has_telemetry INTEGER

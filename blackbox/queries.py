@@ -77,7 +77,9 @@ def summary(con, f: dict) -> dict:
     t = dict(con.execute(f"""SELECT COUNT(*) n, SUM(result='win') w, SUM(result='loss') l, SUM(kills) k,
         SUM(ground_kills) gk, SUM(deaths) d, SUM(assists) a, AVG(score) score, SUM(missile_evades) ev,
         AVG(1.0 * (lobby_pos - 1) / NULLIF(n_players - 1, 0)) lobby, SUM(has_result) nres,
-        AVG(total_sl) sl, AVG(total_rp) rp, SUM(played_s) played FROM battles b{w}""", p).fetchone())
+        AVG(total_sl) sl, AVG(total_rp) rp, SUM(played_s) played,
+        SUM(bases_est) bases, COUNT(bases_est) nbases, SUM(bases_est > 0) nbase_battles,
+        SUM(CASE WHEN bases_est IS NOT NULL THEN air_kills END) bk FROM battles b{w}""", p).fetchone())
 
     bw = w + " AND b.has_replay = 1"
     lob = dict(con.execute(f"""WITH bs AS (SELECT session_id FROM battles b{bw})
@@ -252,6 +254,10 @@ def _avg(xs):
     return sum(xs) / len(xs) if xs else None
 
 
+def _num(x):
+    return f"{x:,.0f}".replace(",", ".")
+
+
 def _pct(x):
     return f"%{round(100 * x)}"
 
@@ -310,9 +316,26 @@ def skill_report(con, f: dict) -> dict:
               "low_alt": _avg([l["low_alt_share"] for l in flown]), "max_g": _avg([l["max_g"] for l in flown]),
               "avg_tas": _avg([l["avg_tas_kmh"] for l in flown])}
 
+    bases = _bases(con, w, p)
     return {"kind": "air", "classes": classes, "first_death": {"me": my_fd, "lobby": lob_fd}, "lobby": lob,
-            "defense": defense, "energy": energy,
-            "findings": _findings(classes, my_fd, lob_fd, lob, defense, energy)}
+            "defense": defense, "energy": energy, "bases": bases,
+            "findings": _findings(classes, my_fd, lob_fd, lob, defense, energy, bases)}
+
+
+def _bases(con, w, p) -> dict:
+    """Base bombing: counted in bases taken (result text, or a per-aircraft estimate), never in tonnage."""
+    b = dict(con.execute(f"""SELECT COUNT(bases_est) n, SUM(has_result) exact, SUM(bases_est) bases,
+        SUM(bases_est > 0) with_bases, SUM(air_kills) air_kills, MAX(bases_est) best
+        FROM battles b{w} AND b.bases_est IS NOT NULL""", p).fetchone())
+    # grind effect: only battles with a result text have exact RP/SL and an exact base count
+    split = _rows(con.execute(f"""SELECT bases > 0 took, COUNT(*) n, AVG(total_rp) rp, AVG(total_sl) sl,
+        AVG(score) score, AVG(air_kills) kills FROM battles b{w} AND b.has_result = 1 GROUP BY 1""", p))
+    b["split"] = {("with" if r["took"] else "without"): r for r in split}
+    n = b["n"] or 0
+    b["per_match"] = (b["bases"] or 0) / n if n else None
+    b["share"] = (b["with_bases"] or 0) / n if n else None
+    b["impact"] = ((b["bases"] or 0) + (b["air_kills"] or 0)) / n if n else None
+    return b
 
 
 def _first_death(kills) -> tuple:
@@ -441,7 +464,7 @@ def _ground_findings(groups, ammo, my_fd, lob_fd, lob) -> list[dict]:
     return out
 
 
-def _findings(classes, my_fd, lob_fd, lob, defense, energy) -> list[dict]:
+def _findings(classes, my_fd, lob_fd, lob, defense, energy, bases=None) -> list[dict]:
     out = []
 
     def add(kind, title, detail, n, min_n=5, hint=None):
@@ -486,7 +509,12 @@ def _findings(classes, my_fd, lob_fd, lob, defense, energy) -> list[dict]:
         if mine >= theirs * 1.2:
             add("strong", "Lobiden yüksek K/D", detail, lob["n"] or 0)
         elif mine <= theirs * 0.8:
-            add("weak", "K/D lobinin altında", detail, lob["n"] or 0)
+            if bases and (bases.get("per_match") or 0) >= 0.3:
+                detail += (f" Ama maç başına {bases['per_match']:.1f} üs alıyorsun; oyun tarzın kill değil "
+                           f"hedef odaklı, K/D tek başına seni anlatmıyor.")
+                add("note", "K/D lobinin altında, ama üs bombalıyorsun", detail, lob["n"] or 0)
+            else:
+                add("weak", "K/D lobinin altında", detail, lob["n"] or 0)
 
     if my_fd and lob_fd:
         diff = (lob_fd - my_fd) / 1000
@@ -529,6 +557,25 @@ def _findings(classes, my_fd, lob_fd, lob, defense, energy) -> list[dict]:
         add("note", "Sık sık takımın en önündesin",
             f"Düşman görünürken zamanın {_pct(energy['front'])} kadarında düşmana en yakın dost uçak sendin. "
             f"Bu hem fırsat hem de ilk hedef olmak demek.", energy["n"], 4)
+    if bases and bases.get("n"):
+        n, pm = bases["n"], bases["per_match"] or 0
+        w_, wo = bases["split"].get("with"), bases["split"].get("without")
+        detail = (f"{n} maçta toplam {bases['bases'] or 0} üs; maç başına {pm:.1f}, "
+                  f"maçların {_pct(bases['share'] or 0)} kadarında en az bir üs aldın.")
+        if w_ and wo and w_["rp"] and wo["rp"]:
+            detail += (f" Üs aldığın maçlarda ortalama {_num(w_['rp'])} RP / {_num(w_['sl'])} SL, "
+                       f"almadıklarında {_num(wo['rp'])} RP / {_num(wo['sl'])} SL.")
+        if pm >= 0.5 or (bases["share"] or 0) >= 0.35:
+            add("strong", "Üs bombalamada güçlüsün", detail, n, 5)
+            out[-1]["prio"] = 1
+        elif pm > 0:
+            add("note", "Arada üs alıyorsun", detail, n, 5)
+        if w_ and wo and w_["rp"] and wo["rp"] and w_["n"] >= 3 and wo["n"] >= 3 and w_["rp"] >= 1.5 * wo["rp"]:
+            add("strong", f"Üs almak grind'ını {w_['rp'] / wo['rp']:.1f} kat artırıyor",
+                f"Sonuç metni olan {w_['n'] + wo['n']} maçta: üs aldığın {w_['n']} maçın ortalaması "
+                f"{_num(w_['rp'])} RP, almadığın {wo['n']} maçın {_num(wo['rp'])} RP.",
+                w_["n"] + wo["n"], 6)
+            out[-1]["prio"] = 1
     order = {"weak": 0, "strong": 1, "note": 2}
-    out.sort(key=lambda x: (x["low_data"], order[x["kind"]]))
+    out.sort(key=lambda x: (x["low_data"], order[x["kind"]], -x.get("prio", 0)))
     return out

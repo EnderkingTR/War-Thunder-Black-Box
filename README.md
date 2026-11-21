@@ -55,6 +55,12 @@ Kara filtresinde Beceri sayfası seni düşüren araç türünü (tank, SPAA, u�
 lobiyle karşılaştırır; kara maçlarında kill = kara + hava kill. Yeniden doğan araçlar replay'de yeni kimlik
 aldığı için ölümlerin bir kısmı araç türüne eşlenemeyebilir; sayfa kaçının eşlendiğini gösterir.
 
+**Üs bombalama** ton hasarına göre değil **alınan üs sayısına** göre ölçülür (3 × Mk 77 ile de üs alınır).
+Sayı sonuç metnindeki "Yok edilen üsler" satırlarından gelir. Sonuç metni olmayan maçlarda (≈) o uçakla verilen üs
+hasarı, aynı uçağın sonuç metinli maçlarındaki üs başına hasarla sayıya çevrilir; sonuç metni hiç olmayan uçaklar
+tahmin edilmez. Beceri sayfası üs aldığın ve almadığın maçların RP/SL'sini karşılaştırır; düşük K/D'yi üs bombalamayla
+birlikte değerlendirir. Diğer oyuncuların üs sayısı replay'de kayıtlı olmadığı için lobi kıyası yapılmaz.
+
 Filtreler (`stats` ve `battles`): `--vehicle fa_18c_late`, `--map İspanya`, `--last 20`,
 `--since 2026-11-01`, `--type air|ground|all` (varsayılan: air).
 

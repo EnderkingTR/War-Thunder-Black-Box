@@ -13,7 +13,7 @@ from .session import ROOT
 
 RESULTS_DIR = ROOT / "results"
 DEFAULT_REPLAY_DIR = Path(r"C:\Program Files (x86)\Steam\steamapps\common\War Thunder\Replays")
-REPLAY_VERSION = 3
+REPLAY_VERSION = 4
 GROUND_MODES = ("fetih", "hakimiyet", "çarpışma", "savaş", "conquest", "domination", "battle")
 
 
@@ -39,6 +39,8 @@ def battle_kind(battle_class: str | None, mode: str | None = None) -> str:
     if battle_class:
         return "ground" if "ground" in battle_class.lower() else "air"
     m = (mode or "").lower()
+    if "sürekli" in m:  # "Sürekli Çarpışmalar" = air Enduring Confrontation
+        return "air"
     return "ground" if any(g in m for g in GROUND_MODES) else "air"
 
 
@@ -97,6 +99,7 @@ def import_replay(con, path: Path, me: str) -> str:
             "kills": p.get("kills"), "ground_kills": p.get("groundKills"), "ai_kills": p.get("aiKills"),
             "assists": p.get("assists"), "deaths": p.get("deaths"), "score": p.get("score"),
             "missile_evades": p.get("missileEvades"), "is_me": int(i == my_idx),
+            "damage_zone": p.get("damageZone"),
             "mode_kills": (p.get("kills") or 0) + ((p.get("groundKills") or 0) if kind == "ground" else 0)})
 
     # killer_pid is the index into the results player list. Entity uids of first spawns are pid + a per-match
@@ -144,6 +147,7 @@ def import_replay(con, path: Path, me: str) -> str:
                     "my_rank": rank, "my_kills": p.get("kills"), "my_ground_kills": p.get("groundKills"),
                     "my_ai_kills": p.get("aiKills"), "my_deaths": p.get("deaths"), "my_assists": p.get("assists"),
                     "my_score": p.get("score"), "my_missile_evades": p.get("missileEvades"),
+                    "my_damage_zone": p.get("damageZone"),
                     "lobby_pos": by_score.index(my_idx) + 1, "team_pos": team.index(my_idx) + 1})
     db.insert(con, "replays", row)
     return sid
@@ -254,11 +258,24 @@ def rebuild_battles(con) -> int:
                 "kills": (r["my_kills"] or 0) + ((r["my_ground_kills"] or 0) if r["kind"] == "ground" else 0),
                 "air_kills": r["my_kills"], "ground_kills": r["my_ground_kills"],
                 "deaths": r["my_deaths"], "assists": r["my_assists"], "score": r["my_score"],
-                "missile_evades": r["my_missile_evades"], "lobby_pos": r["lobby_pos"], "n_players": r["n_players"],
+                "missile_evades": r["my_missile_evades"], "damage_zone": r["my_damage_zone"],
+                "lobby_pos": r["lobby_pos"], "n_players": r["n_players"],
                 "team_pos": r["team_pos"], "end_s": r["end_s"], "has_replay": 1}
+        counts = {}
+        for r in con.execute("SELECT session_id, category, COUNT(*) n FROM result_items GROUP BY 1, 2"):
+            counts.setdefault(r["session_id"], {})[r["category"]] = r["n"]
         for r in con.execute("SELECT * FROM results"):
-            b = rows.setdefault(r["session_id"], {"session_id": r["session_id"], "map": r["map_name"],
-                                                  "kind": battle_kind(None, r["mode"]), "has_replay": 0})
+            sid = r["session_id"]
+            if sid not in rows:
+                # Enduring Confrontation: the result text's session id differs from the replay's in the
+                # middle digits; prefix and last 5 digits match
+                sid = next((s for s in rows if s[:8] == sid[:8] and s[-5:] == sid[-5:]
+                            and not rows[s].get("has_result")), sid)
+            b = rows.setdefault(sid, {"session_id": sid, "map": r["map_name"],
+                                      "kind": battle_kind(None, r["mode"]), "has_replay": 0})
+            c = counts.get(r["session_id"], {})
+            b.update({"bases": c.get("Yok edilen üsler", 0), "base_hits": c.get("Üslere verilen hasar", 0),
+                      "ground_targets": c.get("Kara hedeflerinin yok edilmesi", 0)})
             b.update({"mode": r["mode"], "result": r["result"], "played_s": r["played_s"],
                       "activity": r["activity"], "total_sl": r["total_sl"], "total_rp": r["total_rp"],
                       "earned_sl": r["earned_sl"], "repair_sl": r["repair_sl"], "has_result": 1})
@@ -266,9 +283,27 @@ def rebuild_battles(con) -> int:
         for m in con.execute("SELECT id, session_id FROM matches WHERE session_id IS NOT NULL"):
             if m["session_id"] in rows:
                 rows[m["session_id"]].update({"match_id": m["id"], "has_telemetry": 1})
+        # damage_zone is base *damage*: it scales with bomb size (3 x Mk 77 can take a base for ~25 points, big
+        # bombs score far more), so it is only turned into a base count with a per-aircraft ratio learned from
+        # the player's own result texts, where the exact number of destroyed bases is listed. Aircraft without
+        # such a calibration stay unknown (NULL) instead of being guessed.
+        cal = {}
+        for b in rows.values():
+            if b.get("has_result") and b.get("kind") == "air" and b.get("damage_zone"):
+                c = cal.setdefault(b.get("vehicle"), [0, 0])
+                c[0] += b.get("bases") or 0
+                c[1] += b["damage_zone"]
+        ratio = {v: n / dz for v, (n, dz) in cal.items() if n}
         for b in rows.values():
             b.setdefault("has_result", 0)
             b.setdefault("has_telemetry", 0)
+            if b.get("kind") == "air":
+                if b["has_result"]:
+                    b["bases_est"] = b.get("bases") or 0
+                elif not b.get("damage_zone"):
+                    b["bases_est"] = 0 if b.get("has_replay") else None
+                elif b.get("vehicle") in ratio:
+                    b["bases_est"] = round(b["damage_zone"] * ratio[b["vehicle"]])
             db.insert(con, "battles", b)
     return len(rows)
 

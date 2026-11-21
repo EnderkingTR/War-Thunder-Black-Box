@@ -202,7 +202,7 @@ main { padding: 22px; max-width: 1480px; margin: 0 auto; outline: none; }
 .back:hover { color: var(--accent); }
 
 /* ---------- KPI strip ---------- */
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
 .kpi { padding: 14px var(--pad) 16px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); margin: 0 -1px -1px 0; }
 .kpi-label { font-size: 10px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
 .kpi-value { font-size: 30px; font-weight: 500; line-height: 1.1; margin-top: 6px; letter-spacing: -0.02em; }
