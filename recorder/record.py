@@ -218,8 +218,12 @@ def in_match() -> bool | None:
     return bool(isinstance(info, dict) and info.get("valid"))
 
 
-def run() -> None:
+def run(clipboard: bool = True) -> None:
     print(f"BlackBox recorder - recordings go to {RECORDINGS_DIR}")
+    if clipboard and sys.platform == "win32":
+        import clipboard_watch
+        clipboard_watch.start_background(lambda title: print(f"\n[SONUÇ] kaydedildi: {title}"))
+        print("Clipboard watcher on: copy battle results in the hangar and they are saved automatically.")
     print("Waiting for War Thunder (Ctrl+C to quit)...")
     session: Session | None = None
     invalid_since: float | None = None
@@ -295,8 +299,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--probe", action="store_true", help="fetch every endpoint once and exit")
     parser.add_argument("--url", default=BASE_URL, help="API base URL (default %(default)s)")
+    parser.add_argument("--no-clipboard", action="store_true", help="do not watch the clipboard for battle results")
     args = parser.parse_args()
     BASE_URL = args.url.rstrip("/")
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
-    probe() if args.probe else run()
+    probe() if args.probe else run(clipboard=not args.no_clipboard)

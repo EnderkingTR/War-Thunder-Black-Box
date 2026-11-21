@@ -1,6 +1,8 @@
 recordings/
 blackbox.db
 config.json
+results/
+Mac_Sonuclari.txt
 __pycache__/
 *.pyc
 .venv/

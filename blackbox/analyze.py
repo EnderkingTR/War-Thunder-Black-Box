@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from . import killfeed
 from .session import Session
 
-ANALYZER_VERSION = 2
+ANALYZER_VERSION = 3
 NOT_SPAWNED_TYPES = {"dummy_plane", ""}
 KILL_KINDS = {"kill", "destroy"}
 DAMAGE_KINDS = {"crit", "severe", "fire", "hit", "kill", "destroy"}
@@ -144,11 +144,13 @@ def _life_for(lives: list[Life], t: float, slack: float = 5.0) -> Life | None:
 
 def _telemetry(s: Session, life: Life, scale_m: float | None) -> None:
     gs, machs, alts, tas, times = [], [], [], [], []
+    # G is only counted while flying intact: hits and impacts produce unrealistic spikes.
+    g_until = (life.first_hit_t - 1.0) if life.first_hit_t is not None else life.end_t - 2.0
     for t, d in s.state.between(life.spawn_t, life.end_t):
         if not (isinstance(d, dict) and d.get("valid")):
             continue
         times.append(t)
-        if (v := d.get("Ny")) is not None: gs.append(v)
+        if (v := d.get("Ny")) is not None and t <= g_until: gs.append(v)
         if (v := d.get("M")) is not None: machs.append(v)
         if (v := d.get("H, m")) is not None: alts.append(v)
         if (v := d.get("TAS, km/h")) is not None: tas.append(v)

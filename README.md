@@ -2,50 +2,55 @@
 
 Kişisel War Thunder maç analiz aracı. Önce hava muharebeleri (Air RB), maç sonrası analiz.
 
-Veri kaynağı yalnızca oyunun kendi yerel telemetri arayüzü (`http://127.0.0.1:8111`).
-Bellek okuma, enjeksiyon veya oyun dosyasına müdahale **yoktur**.
+Yalnızca oyunun kendi ürettiği verileri okur: yerel telemetri arayüzü (`127.0.0.1:8111`),
+diskteki replay dosyaları (`.wrpl`) ve hangarda kopyaladığın savaş sonucu metinleri.
+Bellek okuma, enjeksiyon, oyun dosyasına müdahale veya şifre çözme **yoktur**.
 
-Gereksinim: Python 3.10+ (ek paket gerekmez).
+Gereksinim: Python 3.14+ (replay sıkıştırması için standart kütüphanedeki `compression.zstd`). Ek paket gerekmez.
 
-## 1. Maçları kaydet
+## Üç veri kaynağı
 
-Oyundan önce başlat, açık bırak. Maçlar otomatik algılanır ve `recordings/` klasörüne kaydedilir:
-```powershell
-python recorder/record.py
-```
-Hangarda API'yi hızlıca kontrol etmek için: `python recorder/record.py --probe`
-Tek bir kaydın ham raporu için: `python recorder/inspect_session.py`
+| Kaynak | Ne verir | Nasıl gelir |
+|---|---|---|
+| Telemetri (8111) | Uçuş verisi: irtifa, hız, G, konum, minimapteki düşmanlar, kill feed | `recorder/record.py` açıkken otomatik |
+| Replay (`.wrpl`) | Harita, kim kimi **hangi silahla** düşürdü, lobideki 32 oyuncunun skor/K/D/füzeden kaçış | Oyun ayarında replay otomatik kaydı açık olmalı |
+| Sonuç metni | Zafer/yenilgi, SL/RP, tamir, aktivite | Hangardaki savaş sonucu bildiriminde "kopyala"ya bas; recorder açıksa panodan otomatik kaydedilir |
 
-## 2. Analiz et
+Üçü oturum kimliği (`Oturum: ...`) üzerinden aynı maça bağlanır.
 
-İlk seferde oyun içi adını kaydet:
+## Kullanım
+
+İlk seferde oyun içi adını kaydet (replay klasörün farklıysa `--replay-dir` ekle):
 ```powershell
 python -m blackbox setup ENDERKING_tr
 ```
-Yeni kayıtları veritabanına aktar (`blackbox.db`):
+
+Oynamadan önce recorder'ı başlat (telemetri + pano izleyici):
+```powershell
+python recorder/record.py
+```
+
+Oynadıktan sonra içe aktar ve bak:
 ```powershell
 python -m blackbox import
-```
-İstatistikler:
-```powershell
 python -m blackbox stats
-python -m blackbox stats --vehicle fa_18c_late --last 20
-python -m blackbox matches
-python -m blackbox match 200407
+python -m blackbox battles --last 10
+python -m blackbox battle 72c412c10016f0ec --lobby
 ```
-Haritalar: oyun harita adını vermediği için her haritaya bir anahtar atanır. Bir kez isim verirsin:
-```powershell
-python -m blackbox maps
-python -m blackbox name-map b4037ac4 "Sinai"
-```
-Tanınmayan kill feed satırları (ayrıştırıcıyı geliştirmek için): `python -m blackbox unknown`
 
-Analiz kodu güncellendiğinde `import` eski maçları otomatik yeniden işler; `--force` hepsini zorla yeniden işler.
+Filtreler (`stats` ve `battles`): `--vehicle fa_18c_late`, `--map İspanya`, `--last 20`,
+`--since 2026-11-01`, `--type air|ground|all` (varsayılan: air).
+
+Daha önce bir dosyaya yapıştırdığın sonuç metinleri için: `python -m blackbox add-results Mac_Sonuclari.txt`
+
+Haritalar sonuç metinlerinden Türkçe isim öğrenir; elle isim vermek için:
+`python -m blackbox maps` ve `python -m blackbox name-map air_vietnam "Vietnam"`
 
 ## Bilinen sınırlamalar
-- API'de füze/RWR verisi ve kill mesajlarında silah bilgisi yok; davranış analizi tahmine dayalıdır.
+- RWR ve radar kilidi verisi hiçbir kaynakta (henüz) yok.
+- Kazanma durumu yalnızca sonuç metninden gelir; replay, oyundan çıktığın anda kesilir.
+- Replay formatı resmi değildir; topluluk araştırmasına dayanır (WTACRP, wrpl-inspector). Oyun güncellemesinden sonra bozulabilir.
 - "En yakın düşman" yalnızca minimapte görünen (tespit edilmiş) düşmanları kapsar.
-- Düştükten sonra maçtan çıkarsan maç sonucu bilinemez (`unknown`).
 
 ## Geliştirme
 ```powershell
