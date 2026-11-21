@@ -89,6 +89,8 @@ def make_handler(me: str, replay_dir: Path):
                     return self._json(t) if t else self._json({"error": "not found"}, 404)
                 if route == "weapons":
                     return self._json(queries.weapons(con, f))
+                if route == "skills":
+                    return self._json(queries.skill_report(con, f))
                 if route == "maps":
                     return self._json(queries.maps(con, f))
                 if route == "vehicles":

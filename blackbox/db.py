@@ -15,7 +15,7 @@ from .analyze import ANALYZER_VERSION, Match
 from .session import ROOT
 
 DB_PATH = ROOT / "blackbox.db"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS lives (
     death_nearest_enemy_km REAL, death_enemies_within_20km INTEGER, kills_air INTEGER,
     kills_ground INTEGER, hits_dealt INTEGER, hits_taken INTEGER, max_g REAL, min_g REAL,
     max_mach REAL, avg_alt_m REAL, avg_tas_kmh REAL, low_alt_share REAL, distance_km REAL,
+    def_threat_km REAL, def_aspect REAL, def_notch REAL, def_cold REAL, def_hot REAL, def_low REAL,
+    def_max_g REAL, def_turn_deg REAL, def_tas0 REAL, def_tas1 REAL, def_alt0 REAL, def_alt1 REAL,
+    energy_m REAL, low_energy_share REAL, ab_share REAL, front_share REAL,
     PRIMARY KEY (match_id, idx)
 );
 CREATE TABLE IF NOT EXISTS events (
@@ -95,7 +98,10 @@ LIFE_COLS = ["idx", "vehicle", "spawn_t", "end_t", "duration_s", "end_reason", "
              "first_hit_t", "death_alt_m", "death_tas_kmh", "death_mach", "death_g",
              "death_nearest_enemy_km", "death_enemies_within_20km", "kills_air", "kills_ground",
              "hits_dealt", "hits_taken", "max_g", "min_g", "max_mach", "avg_alt_m", "avg_tas_kmh",
-             "low_alt_share", "distance_km"]
+             "low_alt_share", "distance_km",
+             "def_threat_km", "def_aspect", "def_notch", "def_cold", "def_hot", "def_low", "def_max_g",
+             "def_turn_deg", "def_tas0", "def_tas1", "def_alt0", "def_alt1",
+             "energy_m", "low_energy_share", "ab_share", "front_share"]
 EVENT_COLS = ["t", "game_time", "kind", "actor", "actor_squad", "actor_vehicle", "target", "target_squad",
               "target_vehicle", "extra", "me_actor", "me_target", "raw"]
 
@@ -107,9 +113,14 @@ def connect() -> sqlite3.Connection:
     except sqlite3.OperationalError:
         ver = None
     if ver is None or int(ver[0]) != SCHEMA_VERSION:
-        con.close()
-        DB_PATH.unlink(missing_ok=True)  # derived data only; rebuilt by import
-        con = _open()
+        # derived data only (rebuilt by import): drop everything in place, so an open web server
+        # holding the file does not block the upgrade
+        con.execute("PRAGMA foreign_keys = OFF")
+        tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        for t in tables:
+            con.execute(f'DROP TABLE IF EXISTS "{t}"')
+        con.commit()
+        con.execute("PRAGMA foreign_keys = ON")
         con.executescript(SCHEMA)
         con.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
         con.commit()

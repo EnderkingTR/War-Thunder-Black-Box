@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from . import names, session
+from . import names, session, skills
 
 AIR_TYPES = ("fighter", "assault", "bomber", "attacker")
 
@@ -233,3 +233,184 @@ def grind(con, f: dict) -> dict:
         AVG(repair_sl) repair, SUM(played_s) played, SUM(total_sl) sum_sl, SUM(total_rp) sum_rp
         FROM battles b{w} GROUP BY vehicle ORDER BY n DESC""", p)))
     return {"battles": rows, "totals": agg, "by_vehicle": by_vehicle}
+
+
+# ------------------------------------------------------------------ skills
+def _class_counts(weapons: list) -> dict:
+    out = {c: 0 for c in skills.CLASSES}
+    for wpn in weapons:
+        out[skills.weapon_class(wpn)] += 1
+    return out
+
+
+def _median(xs):
+    xs = sorted(x for x in xs if x is not None)
+    return xs[len(xs) // 2] if xs else None
+
+
+def _avg(xs):
+    xs = [x for x in xs if x is not None]
+    return sum(xs) / len(xs) if xs else None
+
+
+def _pct(x):
+    return f"%{round(100 * x)}"
+
+
+def skill_report(con, f: dict) -> dict:
+    w, p = build_where(f)
+    K = f"FROM replay_kills k JOIN battles b ON b.session_id = k.session_id{w}"
+    kills = _rows(con.execute(f"""SELECT k.session_id, k.ms, k.weapon, k.me_victim, k.me_killer, k.victim_idx,
+        k.killer_idx, k.destroyed_weapon {K} AND k.victim_name IS NOT NULL ORDER BY k.session_id, k.ms""", p))
+
+    # what kills you vs what kills everybody else in the same battles
+    my_d = _class_counts([k["weapon"] for k in kills if k["me_victim"]])
+    lob_d = _class_counts([k["weapon"] for k in kills if not k["me_victim"]])
+    my_k = _class_counts([k["weapon"] for k in kills if k["me_killer"] and not k["destroyed_weapon"]])
+    lob_k = _class_counts([k["weapon"] for k in kills if not k["me_killer"] and k["killer_idx"] is not None
+                           and not k["destroyed_weapon"]])
+    classes = [{"id": c, "name": n, "my_deaths": my_d[c], "lobby_deaths": lob_d[c], "my_kills": my_k[c],
+                "lobby_kills": lob_k[c]} for c, n in skills.CLASSES.items()]
+
+    # first death time: you vs the lobby
+    first_death: dict = {}
+    for k in kills:
+        first_death.setdefault((k["session_id"], k["victim_idx"]), (k["ms"], k["me_victim"]))
+    my_fd = _median([ms for ms, me in first_death.values() if me])
+    lob_fd = _median([ms for ms, me in first_death.values() if not me])
+
+    bw = w + " AND b.has_replay = 1"
+    lob = dict(con.execute(f"""WITH bs AS (SELECT session_id FROM battles b{bw})
+        SELECT COUNT(DISTINCT session_id) n,
+          AVG(CASE WHEN is_me=1 THEN missile_evades END) my_ev, AVG(CASE WHEN is_me=0 THEN missile_evades END) l_ev,
+          SUM(CASE WHEN is_me=1 THEN kills END) my_k, SUM(CASE WHEN is_me=1 THEN deaths END) my_d,
+          SUM(CASE WHEN is_me=0 THEN kills END) l_k, SUM(CASE WHEN is_me=0 THEN deaths END) l_d
+        FROM replay_players rp JOIN bs USING (session_id)""", p).fetchone())
+
+    # telemetry: defensive window of every shot-down life, paired in order with the replay's kill weapon
+    lives = _rows(con.execute(f"""SELECT l.*, b.session_id, b.started, b.map
+        FROM lives l JOIN battles b ON b.match_id = l.match_id{w} ORDER BY b.started, l.idx""", p))
+    my_deaths: dict = {}
+    for k in kills:
+        if k["me_victim"]:
+            my_deaths.setdefault(k["session_id"], []).append(k)
+    defense, used = [], {}
+    for l in lives:
+        if l["end_reason"] != "shot_down":
+            continue
+        i = used.get(l["session_id"], 0)
+        used[l["session_id"]] = i + 1
+        dk = my_deaths.get(l["session_id"], [])
+        wpn = dk[i]["weapon"] if i < len(dk) else None
+        cls = skills.weapon_class(wpn) if i < len(dk) else "unknown"
+        style, verdict = skills.defense_verdict(cls, l) if l["def_max_g"] is not None else ("veri yok", "n/a")
+        defense.append({"session_id": l["session_id"], "started": l["started"], "map": l["map"],
+                        "vehicle": names.vehicle(l["vehicle"]), "weapon": names.weapon(wpn) if wpn else None,
+                        "cls": cls, "style": style, "verdict": verdict,
+                        **{c: l[c] for c in ("def_threat_km", "def_aspect", "def_notch", "def_cold", "def_hot",
+                                             "def_low", "def_max_g", "def_turn_deg", "def_tas0", "def_tas1",
+                                             "def_alt0", "def_alt1")}})
+
+    flown = [l for l in lives if (l["duration_s"] or 0) >= 60]
+    energy = {"n": len(flown), "energy_m": _avg([l["energy_m"] for l in flown]),
+              "low_energy": _avg([l["low_energy_share"] for l in flown]),
+              "ab": _avg([l["ab_share"] for l in flown]), "front": _avg([l["front_share"] for l in flown]),
+              "low_alt": _avg([l["low_alt_share"] for l in flown]), "max_g": _avg([l["max_g"] for l in flown]),
+              "avg_tas": _avg([l["avg_tas_kmh"] for l in flown])}
+
+    return {"classes": classes, "first_death": {"me": my_fd, "lobby": lob_fd}, "lobby": lob,
+            "defense": defense, "energy": energy,
+            "findings": _findings(classes, my_fd, lob_fd, lob, defense, energy)}
+
+
+def _findings(classes, my_fd, lob_fd, lob, defense, energy) -> list[dict]:
+    out = []
+
+    def add(kind, title, detail, n, min_n=5, hint=None):
+        out.append({"kind": kind, "title": title, "detail": detail, "n": n, "low_data": n < min_n, "hint": hint})
+
+    hints = {
+        "radar": "Kilit uyarısında füzeye dik dön (notch) ya da 100 m altına in (multipath); chaff'ı notch'la birlikte at.",
+        "ir": "8-10 km içinde art yakıcıyı kıs, flare'ı füze atılmadan önce de kullan, düşmanın arka yarı küresinde oyalanma.",
+        "sam": "Haritadaki SAM bölgelerine 10-15 km'den fazla yaklaşma; alçakta arazinin arkasında kal.",
+        "gun": "Yakın it dalaşında enerjiyi koru, düz uçuştan kaçın.",
+        "none": "Alçak uçuşta arazi ve aşırı G (bayılma / kanat kopması) sınırlarına dikkat.",
+    }
+
+    my_total = sum(c["my_deaths"] for c in classes)
+    lob_total = sum(c["lobby_deaths"] for c in classes)
+    if my_total >= 5 and lob_total:
+        for c in classes:
+            if c["id"] == "other":
+                continue
+            a, b = c["my_deaths"] / my_total, c["lobby_deaths"] / lob_total
+            what = c["name"] if c["id"] != "none" else "Kaza / yere çakılma"
+            if a - b >= 0.08:
+                detail = f"Ölümlerinin {_pct(a)} kadarı bu kaynaktan; aynı maçlardaki lobide {_pct(b)}."
+                if c["id"] == "ir" and (energy.get("ab") or 0) >= 0.6:
+                    detail += f" Art yakıcın uçuş süresinin {_pct(energy['ab'])} kadarında açık; IR füzeleri için kolay hedef."
+                add("weak", f"{what} seni sık düşürüyor", detail, my_total, 8, hints.get(c["id"]))
+            elif b - a >= 0.08 and c["lobby_deaths"] >= 10:
+                add("strong", f"{what} seni nadiren düşürüyor",
+                    f"Ölümlerinin {_pct(a)} kadarı bu kaynaktan; lobide {_pct(b)}.", my_total, 8)
+
+    if lob.get("my_ev") is not None and lob.get("l_ev"):
+        r = lob["my_ev"] / lob["l_ev"]
+        detail = f"Maç başına {lob['my_ev']:.1f} füzeden kaçış; lobi ortalaması {lob['l_ev']:.1f}."
+        if r >= 1.2:
+            add("strong", "Füzelerden kaçmakta iyisin", detail, lob["n"] or 0)
+        elif r <= 0.8:
+            add("weak", "Füzelerden kaçışın lobinin altında", detail, lob["n"] or 0)
+
+    if lob.get("my_d") and lob.get("l_d"):
+        mine, theirs = lob["my_k"] / lob["my_d"], lob["l_k"] / lob["l_d"]
+        detail = f"K/D {mine:.2f}; aynı maçlardaki lobi {theirs:.2f}."
+        if mine >= theirs * 1.2:
+            add("strong", "Lobiden yüksek K/D", detail, lob["n"] or 0)
+        elif mine <= theirs * 0.8:
+            add("weak", "K/D lobinin altında", detail, lob["n"] or 0)
+
+    if my_fd and lob_fd:
+        diff = (lob_fd - my_fd) / 1000
+        detail = f"İlk ölümün ortanca {my_fd / 60000:.1f}. dakikada; lobide {lob_fd / 60000:.1f}. dakikada."
+        if diff >= 30:
+            add("weak", "Lobiden erken düşüyorsun", detail, my_total)
+        elif diff <= -30:
+            add("strong", "Lobiden uzun hayatta kalıyorsun", detail, my_total)
+
+    measured = [d for d in defense if d["verdict"] != "n/a" and d["cls"] in ("radar", "ir", "gun", "sam")]
+    radar = [d for d in measured if d["cls"] == "radar"]
+    if radar:
+        undefended = [d for d in radar if d["verdict"] != "good"]
+        notch = sum(1 for d in radar if (d["def_notch"] or 0) >= 0.35)
+        mp = sum(1 for d in radar if (d["def_low"] or 0) >= 0.5)
+        detail = (f"Radar füzesiyle düştüğün {len(radar)} ölümün {notch} tanesinde notch, {mp} tanesinde "
+                  f"multipath (100 m altı) görüldü.")
+        if len(undefended) / len(radar) >= 0.5:
+            add("weak", "Vurulduğun radar füzelerinde savunma zayıf", detail, len(radar), 4, hints["radar"])
+        elif len(undefended) / len(radar) <= 0.25:
+            add("note", "Radar füzelerine karşı savunma yapıyorsun",
+                detail + " Yine de vurulduğuna göre zamanlama ya da yön seçimi gözden geçirilebilir.",
+                len(radar), 4)
+    hot = [d for d in measured if (d["def_hot"] or 0) >= 0.5]
+    if measured and len(hot) / len(measured) >= 0.35:
+        add("weak", "Vurulmadan önce tehdide doğru uçuyorsun",
+            f"{len(measured)} ölümün {len(hot)} tanesinde son 15 saniyenin yarısından fazlasında burnun "
+            f"en yakın düşmana dönüktü.", len(measured), 4,
+            "Atışını yaptıktan sonra burnunu çevir (crank / soğuk), füzen ulaşana kadar düşmana doğru kapanma.")
+
+    if energy["n"] and energy["low_energy"] is not None:
+        if energy["low_energy"] >= 0.12:
+            add("weak", "Enerjini sık kaybediyorsun",
+                f"Uçuş süresinin {_pct(energy['low_energy'])} kadarı 600 km/h altında (300 m üstü).",
+                energy["n"], 4)
+        elif energy["low_energy"] <= 0.03:
+            add("strong", "Enerjini koruyorsun",
+                f"Uçuş süresinin yalnızca {_pct(energy['low_energy'])} kadarı 600 km/h altında.", energy["n"], 4)
+    if energy["n"] and energy["front"] is not None and energy["front"] >= 0.4:
+        add("note", "Sık sık takımın en önündesin",
+            f"Düşman görünürken zamanın {_pct(energy['front'])} kadarında düşmana en yakın dost uçak sendin. "
+            f"Bu hem fırsat hem de ilk hedef olmak demek.", energy["n"], 4)
+    order = {"weak": 0, "strong": 1, "note": 2}
+    out.sort(key=lambda x: (x["low_data"], order[x["kind"]]))
+    return out

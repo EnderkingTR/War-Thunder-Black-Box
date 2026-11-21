@@ -6,10 +6,10 @@ import hashlib
 import math
 from dataclasses import asdict, dataclass, field
 
-from . import killfeed
+from . import killfeed, skills
 from .session import Session
 
-ANALYZER_VERSION = 3
+ANALYZER_VERSION = 4
 NOT_SPAWNED_TYPES = {"dummy_plane", ""}
 KILL_KINDS = {"kill", "destroy"}
 DAMAGE_KINDS = {"crit", "severe", "fire", "hit", "kill", "destroy"}
@@ -43,6 +43,24 @@ class Life:
     avg_tas_kmh: float | None = None
     low_alt_share: float | None = None  # share of time below LOW_ALT_M
     distance_km: float | None = None
+    # pre-hit defensive window (see skills.defense_window)
+    def_threat_km: float | None = None
+    def_aspect: float | None = None
+    def_notch: float | None = None
+    def_cold: float | None = None
+    def_hot: float | None = None
+    def_low: float | None = None
+    def_max_g: float | None = None
+    def_turn_deg: float | None = None
+    def_tas0: float | None = None
+    def_tas1: float | None = None
+    def_alt0: float | None = None
+    def_alt1: float | None = None
+    # whole-life profile (see skills.life_profile)
+    energy_m: float | None = None
+    low_energy_share: float | None = None
+    ab_share: float | None = None
+    front_share: float | None = None
 
     @property
     def duration_s(self) -> float:
@@ -261,6 +279,11 @@ def analyze(s: Session, me: str) -> Match:
 
     for life in lives:
         _telemetry(s, life, scale_m)
+        for k, v in skills.life_profile(s, life.spawn_t, life.end_t, scale_m).items():
+            setattr(life, k, v)
+        if life.end_reason == "shot_down" and life.first_hit_t is not None:
+            for k, v in skills.defense_window(s, life.first_hit_t, scale_m).items():
+                setattr(life, k, v)
         if life.end_reason in ("shot_down", "crashed"):
             _death_snapshot(s, life, life.first_hit_t or life.end_t, scale_m)
         elif life is lives[-1] and result != "unknown":

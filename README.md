@@ -43,9 +43,14 @@ python -m blackbox battle 72c412c10016f0ec --lobby
 python -m blackbox web
 ```
 Tarayıcıda `http://127.0.0.1:8765` açılır (yalnızca bu bilgisayardan erişilir). Sayfalar: Özet, Maçlar
-(tıklayınca maç detayı: zaman çizelgesi, uçuş profili, rota, ödüller, takımlar), Silahlar, Haritalar,
+(tıklayınca maç detayı: zaman çizelgesi, uçuş profili, rota, ödüller, takımlar), Beceri, Silahlar, Haritalar,
 Araçlar, Grind. Sağ üstteki "İçe aktar" yeni replay/kayıtları alır; dört renk teması vardır.
 `--port 9000` ve `--no-browser` seçenekleri var.
+
+**Beceri sayfası** tahmini bir analizdir: replay'lerden seni neyin düşürdüğünü (radar/IR füze, top, SAM, kaza)
+aynı maçlardaki lobiyle karşılaştırır; telemetrili maçlarda her ölümün son 15 saniyesine bakar (en yakın görünen
+düşmana göre notch / soğuk kaçış / tehdide doğru uçuş, radar irtifasıyla multipath, G, hız ve irtifa değişimi).
+Oyun füze atışını ve RWR'ı vermediği için tehdit, atan uçak değil en yakın görünen düşmandır.
 
 Filtreler (`stats` ve `battles`): `--vehicle fa_18c_late`, `--map İspanya`, `--last 20`,
 `--since 2026-11-01`, `--type air|ground|all` (varsayılan: air).

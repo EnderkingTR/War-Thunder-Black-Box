@@ -212,7 +212,7 @@ main { padding: 22px; max-width: 1480px; margin: 0 auto; outline: none; }
 
 /* ---------- form strip (last N battles) ---------- */
 .form-strip { display: flex; align-items: end; gap: 3px; height: 64px; padding: 0 var(--pad) 0; }
-.form-strip a { flex: 1 1 0; min-width: 4px; max-width: 22px; background: var(--neutral); display: block; position: relative; }
+.form-strip a { flex: 1 1 0; min-width: 4px; max-width: 48px; background: var(--neutral); display: block; position: relative; }
 .form-strip a.win { background: var(--win); }
 .form-strip a.loss { background: var(--loss); }
 .form-strip a:hover { outline: 2px solid var(--ink); outline-offset: 1px; }
@@ -343,4 +343,38 @@ svg.chart .grid-label { font-family: var(--font-ui); font-size: 9px; fill: var(-
 .toast {
   position: fixed; right: 22px; bottom: 22px; background: var(--panel); border: 1px solid var(--rule-2);
   border-left: 4px solid var(--accent); padding: 12px 16px; font-size: 13px; z-index: 60; max-width: 360px;
+}
+
+/* ---------------------------------------------------------------- skills */
+.findings { list-style: none; margin: 0; padding: 0; }
+.finding { display: grid; grid-template-columns: 74px 1fr auto; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--rule); align-items: start; }
+.finding:first-child { padding-top: 2px; }
+.finding:last-child { border-bottom: 0; padding-bottom: 2px; }
+.finding .tag { justify-self: start; margin-top: 1px; }
+.finding h3 { margin: 0 0 3px; font-size: 15px; font-weight: 650; font-stretch: 105%; letter-spacing: -0.005em; }
+.finding p { margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.45; }
+.finding p.hint { margin-top: 7px; color: var(--ink); padding-left: 10px; border-left: 2px solid var(--accent); }
+.finding p.hint b { display: block; font-weight: 600; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 1px; }
+.finding .n { font-family: var(--font-num); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.finding.low h3, .finding.low p { opacity: 0.7; }
+.pairs { display: grid; grid-template-columns: minmax(120px, 34%) 1fr auto; gap: 10px 12px; align-items: center; }
+.pair-lab { font-size: 13px; }
+.pair-bars { display: grid; gap: 2px; }
+.pair-bars .pb { height: 7px; min-width: 1px; }
+.pair-bars .pb.me { background: var(--accent); }
+.pair-bars .pb.lob { background: var(--ink-3); }
+.pair-val { font-family: var(--font-num); font-size: 12px; white-space: nowrap; text-align: right; min-width: 124px; }
+.pair-val b { font-weight: 600; }
+.delta { display: inline-block; min-width: 36px; margin-left: 8px; color: var(--ink-2); text-align: right; }
+.data td.wrap { white-space: normal; min-width: 150px; max-width: 210px; line-height: 1.35; }
+.astack { display: inline-flex; width: 110px; height: 10px; background: var(--sunk); vertical-align: middle; }
+.astack i { display: block; height: 100%; }
+.astack .hot { background: var(--loss); }
+.astack .notch { background: var(--accent); }
+.astack .cold { background: var(--win); }
+.cls-chip { font-family: var(--font-num); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+@media (max-width: 720px) {
+  .finding { grid-template-columns: 1fr; gap: 6px; }
+  .pairs { grid-template-columns: 1fr auto; }
+  .pair-bars { grid-column: 1 / -1; }
 }

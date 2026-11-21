@@ -101,7 +101,7 @@ function panel(title, body, { cls = "c12", aside = "", flush = false } = {}) {
 function kpis(items) {
   return `<div class="kpis">${items.map((k) => `<div class="kpi${k.hl ? " hl" : ""}">
     <div class="kpi-label">${esc(k.label)}</div>
-    <div class="kpi-value">${k.value}${k.unit ? `<small>${esc(k.unit)}</small>` : ""}</div>
+    <div class="kpi-value">${k.unit === "%" && k.value !== "–" ? `<small>%</small>` : ""}${k.value}${k.unit && k.unit !== "%" ? `<small>${esc(k.unit)}</small>` : ""}</div>
     ${k.sub ? `<div class="kpi-sub">${k.sub}</div>` : ""}</div>`).join("")}</div>`;
 }
 
@@ -291,6 +291,94 @@ async function pageWeapons(view) {
     ${panel("Düşürdüğün araçlar", barList(w.victims, { cls: "acc" }), { cls: "c6" })}
     ${w.intercepts.length ? panel("Vurduğun füzeler", barList(w.intercepts), { cls: "c6", aside: "mühimmat etkisizleştirme" }) : ""}
   </div>`;
+}
+
+// ---------------------------------------------------------------- skills
+const KIND = { weak: ["Zayıf", "loss"], strong: ["Güçlü", "win"], note: ["Not", "none"] };
+const CLS_SHORT = { radar: "Radar", ir: "IR", gun: "Top", sam: "SAM", none: "Kaza", other: "Diğer", unknown: "?" };
+const VERDICT = { good: ["Savunma var", "win"], weak: ["Zayıf", "loss"], none: ["Savunma yok", "loss"], "n/a": ["–", "none"] };
+
+function findingList(items) {
+  if (!items.length) return empty("Henüz belirgin bir güçlü ya da zayıf yön yok.", "Daha fazla maç biriktikçe burası dolacak.");
+  return `<ol class="findings">${items.map((f) => {
+    const [label, cls] = KIND[f.kind];
+    return `<li class="finding ${f.kind}${f.low_data ? " low" : ""}">
+      <span class="tag ${cls}">${label}</span>
+      <div><h3>${esc(f.title)}</h3><p>${esc(f.detail)}</p>
+      ${f.hint ? `<p class="hint"><b>Ne yapabilirsin</b>${esc(f.hint)}</p>` : ""}</div>
+      <span class="n" data-tip="${f.low_data ? "Örnek az; sonuç değişebilir" : "Dayandığı örnek sayısı"}">n=${f.n}${f.low_data ? " · az veri" : ""}</span></li>`;
+  }).join("")}</ol>`;
+}
+
+// side-by-side share bars: you vs lobby, per weapon class
+function pairBars(classes, mineKey, lobbyKey) {
+  const mt = classes.reduce((a, c) => a + c[mineKey], 0), lt = classes.reduce((a, c) => a + c[lobbyKey], 0);
+  const rows = classes.filter((c) => c[mineKey] || c[lobbyKey]);
+  if (!mt) return '<div class="dim">Veri yok.</div>';
+  const max = Math.max(...rows.map((c) => Math.max(c[mineKey] / mt, lt ? c[lobbyKey] / lt : 0)));
+  return `<div class="pairs">${rows.map((c) => {
+    const a = c[mineKey] / mt, b = lt ? c[lobbyKey] / lt : 0;
+    const d = Math.round(100 * (a - b));
+    const t = `Sen: ${c[mineKey]} (%${Math.round(100 * a)})<br>Lobi: ${c[lobbyKey]} (%${Math.round(100 * b)})`;
+    return `<div class="pair-lab">${esc(c.name)}</div>
+      <div class="pair-bars" data-tip="${esc(t)}"><div class="pb me" style="width:${(100 * a) / max}%"></div><div class="pb lob" style="width:${(100 * b) / max}%"></div></div>
+      <div class="pair-val"><b>%${Math.round(100 * a)}</b> <span class="dim">/ %${Math.round(100 * b)}</span><span class="delta">${d > 0 ? "+" : ""}${d}</span></div>`;
+  }).join("")}</div>
+  <div class="form-legend"><span><i class="sw" style="background:var(--accent)"></i>Sen (${mt})</span><span><i class="sw" style="background:var(--ink-3)"></i>Aynı maçlardaki lobi (${lt})</span><span>sağdaki sayı: fark (puan)</span></div>`;
+}
+
+// share of the pre-hit window spent hot / beaming / cold relative to the nearest spotted enemy
+function aspectStack(r) {
+  if (r.def_hot == null) return '<span class="dim">görünür düşman yok</span>';
+  const seg = (v, cls) => (v ? `<i class="${cls}" style="width:${100 * v}%"></i>` : "");
+  const t = `Tehdide doğru %${Math.round(100 * r.def_hot)} · Notch %${Math.round(100 * r.def_notch)} · Soğuk %${Math.round(100 * r.def_cold)}<br>En yakın görünen düşman ~${num(r.def_threat_km, 1)} km`;
+  return `<span class="astack" data-tip="${esc(t)}">${seg(r.def_hot, "hot")}${seg(r.def_notch, "notch")}${seg(r.def_cold, "cold")}</span>`;
+}
+
+async function pageSkills(view) {
+  const s = await api("skills", state.filters);
+  const e = s.energy, lob = s.lobby, fd = s.first_death;
+  const nDeaths = s.classes.reduce((a, c) => a + c.my_deaths, 0);
+  $("#fCount").textContent = `${lob.n || 0} maç · ${s.defense.length} ölüm analizi`;
+  const mins = (ms) => (ms == null ? "–" : num(ms / 60000, 1));
+  const share = (v) => (v == null ? "–" : num(100 * v));
+  view.innerHTML = `<div class="page-title"><h1>Beceri</h1><span class="meta">Tahmini analiz · ${lob.n || 0} replay · ${e.n} telemetrili uçuş</span></div>
+  <div class="grid">
+    ${panel("Güçlü ve zayıf yönler", findingList(s.findings), { cls: "c12", aside: "lobiyle kıyas + uçuş verisi" })}
+    <section class="panel c12">${kpis([
+      { label: "Füzeden kaçış / maç", value: num(lob.my_ev, 2), sub: `lobi ${num(lob.l_ev, 2)}`, hl: lob.my_ev > lob.l_ev },
+      { label: "K/D", value: lob.my_d ? num(lob.my_k / lob.my_d, 2) : "–", sub: `lobi ${lob.l_d ? num(lob.l_k / lob.l_d, 2) : "–"}` },
+      { label: "İlk ölüm (ortanca)", value: mins(fd.me), unit: " dk", sub: `lobi ${mins(fd.lobby)} dk` },
+      { label: "Ort. enerji yüksekliği", value: num(e.energy_m), unit: " m", sub: "irtifa + hız²/2g" },
+      { label: "600 km/h altı", value: share(e.low_energy), unit: "%", sub: "300 m üstünde" },
+      { label: "Art yakıcı", value: share(e.ab), unit: "%", sub: "uçuş süresinin" },
+      { label: "Takımın önünde", value: share(e.front), unit: "%", sub: "düşmana en yakın dost" },
+      { label: "300 m altı", value: share(e.low_alt), unit: "%", sub: "uçuş süresinin" },
+    ])}</section>
+    ${panel("Seni ne düşürüyor", pairBars(s.classes, "my_deaths", "lobby_deaths"), { cls: "c6", aside: `${nDeaths} ölüm · replay` })}
+    ${panel("Neyle düşürüyorsun", pairBars(s.classes, "my_kills", "lobby_kills"), { cls: "c6", aside: "oyuncu kill'leri · replay" })}
+    ${panel("Vurulmadan önceki 15 saniye", '<div id="dt"></div>', { cls: "c12", flush: true, aside: "telemetrili ölümler · satıra tıkla: maç" })}
+  </div>
+  <p class="note">Oyun füze atışını ve RWR'ı dışarı vermediği için yön analizi <b>en yakın görünen düşman uçağına</b> göre yapılır; atan uçak o olmayabilir.
+  Notch: düşmana göre 65–115°. Multipath: radar irtifası 100 m altı. Değerlendirme füzenin türüne göre yapılır: radar için notch / multipath / soğuk kaçış, IR ve top için sert manevra (6 G+) ya da kaçış aranır.</p>`;
+  const box = $("#dt", view);
+  if (!s.defense.length) {
+    box.innerHTML = empty("Telemetrili ölüm yok.", "Kaydedici açıkken oynadığın maçlarda burada her ölümün son 15 saniyesi görünür.");
+    return;
+  }
+  mountTable(box, [
+    { h: "Tarih", k: "started", f: (r) => `<span class="num">${dt(r.started)}</span>` },
+    { h: "Harita", k: "map" },
+    { h: "Silah", k: "weapon", f: (r) => esc(r.weapon || "–") },
+    { h: "Tür", k: "cls", f: (r) => `<span class="cls-chip">${CLS_SHORT[r.cls] || esc(r.cls)}</span>` },
+    { h: "Yön: sıcak · notch · soğuk", k: "def_notch", f: aspectStack },
+    { h: "100 m altı", k: "def_low", n: true, f: (r) => (r.def_low == null ? "–" : `%${Math.round(100 * r.def_low)}`) },
+    { h: "Maks G", k: "def_max_g", n: true, f: (r) => num(r.def_max_g, 1) },
+    { h: "Hız km/h", k: "def_tas1", n: true, f: (r) => (r.def_tas0 == null ? "–" : `${num(r.def_tas0)}<span class="dim"> → </span>${num(r.def_tas1)}`) },
+    { h: "İrtifa m", k: "def_alt1", n: true, f: (r) => (r.def_alt0 == null ? "–" : `${num(r.def_alt0)}<span class="dim"> → </span>${num(r.def_alt1)}`) },
+    { h: "Görülen", k: "style", cls: "dim wrap" },
+    { h: "Değerlendirme", k: "verdict", f: (r) => `<span class="tag ${VERDICT[r.verdict][1]}">${VERDICT[r.verdict][0]}</span>` },
+  ], s.defense, { key: "session_id", sortKey: "started", onRow: (k) => (location.hash = `#/mac/${k}`) });
 }
 
 function rateBar(v, max = 1, cls = "") {
@@ -623,10 +711,11 @@ function toast(msg) {
 }
 
 // ---------------------------------------------------------------- router
-const routes = { ozet: pageSummary, maclar: pageBattles, silahlar: pageWeapons, haritalar: pageMaps, araclar: pageVehicles, grind: pageGrind };
+const routes = { ozet: pageSummary, maclar: pageBattles, beceri: pageSkills, silahlar: pageWeapons, haritalar: pageMaps, araclar: pageVehicles, grind: pageGrind };
 let routeSeq = 0;
 async function route() {
   const seq = ++routeSeq;
+  hideTip();
   const parts = location.hash.replace(/^#\/?/, "").split("/");
   const page = parts[0] || "ozet";
   const arg = parts[1];
