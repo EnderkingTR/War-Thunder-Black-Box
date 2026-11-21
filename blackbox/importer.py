@@ -13,7 +13,8 @@ from .session import ROOT
 
 RESULTS_DIR = ROOT / "results"
 DEFAULT_REPLAY_DIR = Path(r"C:\Program Files (x86)\Steam\steamapps\common\War Thunder\Replays")
-REPLAY_VERSION = 1
+REPLAY_VERSION = 3
+GROUND_MODES = ("fetih", "hakimiyet", "çarpışma", "savaş", "conquest", "domination", "battle")
 
 
 def _same(a: str | None, b: str) -> bool:
@@ -33,6 +34,22 @@ def import_recordings(con, me: str, force: bool, log=print) -> int:
 
 
 # --------------------------------------------------------------- replays
+def battle_kind(battle_class: str | None, mode: str | None = None) -> str:
+    """'air_ground_Dom' -> ground (tanks with planes); 'base_dom', 'alt_dom' ... -> air."""
+    if battle_class:
+        return "ground" if "ground" in battle_class.lower() else "air"
+    m = (mode or "").lower()
+    return "ground" if any(g in m for g in GROUND_MODES) else "air"
+
+
+def _lineup(pinfo: dict) -> list[tuple[str, str]]:
+    ci = pinfo.get("crafts_info")
+    if not isinstance(ci, dict):
+        return []
+    return [(v["name"], v.get("type")) for k, v in ci.items()
+            if k.startswith("array") and isinstance(v, dict) and v.get("name")]
+
+
 def _craft_info(pinfo: dict) -> tuple[str | None, str | None, int | None]:
     vehicle = vtype = rank = None
     crafts = pinfo.get("crafts")
@@ -64,6 +81,10 @@ def import_replay(con, path: Path, me: str) -> str:
     con.execute("DELETE FROM replay_kills WHERE session_id = ?", (sid,))
 
     my_idx = next((i for i, p in enumerate(players) if _same(p.get("name"), me)), None)
+    kind = battle_kind(h.battle_class)
+    for info in infos.values():
+        for name, vtype in _lineup(info):
+            con.execute("INSERT OR IGNORE INTO vehicle_types VALUES (?, ?)", (name, vtype))
     vehicles = {}
     for i, p in enumerate(players):
         info = infos.get(str(p.get("userId")), {})
@@ -75,31 +96,38 @@ def import_replay(con, path: Path, me: str) -> str:
             "mrank": info.get("mrank"), "country": info.get("country"), "platform": info.get("platform"),
             "kills": p.get("kills"), "ground_kills": p.get("groundKills"), "ai_kills": p.get("aiKills"),
             "assists": p.get("assists"), "deaths": p.get("deaths"), "score": p.get("score"),
-            "missile_evades": p.get("missileEvades"), "is_me": int(i == my_idx)})
+            "missile_evades": p.get("missileEvades"), "is_me": int(i == my_idx),
+            "mode_kills": (p.get("kills") or 0) + ((p.get("groundKills") or 0) if kind == "ground" else 0)})
 
-    # killer_pid is the index into the results player list; entity uids are pid + a per-match base.
+    # killer_pid is the index into the results player list. Entity uids of first spawns are pid + a per-match
+    # base; respawned vehicles (ground battles) get new uids, which we learn when that unit kills something.
     offsets = [k.killer_uid - k.killer_pid for k in rp.kills
                if k.killer_uid is not None and k.killer_pid is not None]
     base = statistics.mode(offsets) if offsets else None
+    uid_owner, uid_vehicle = {}, {}
+    if base is not None:
+        uid_owner = {base + i: i for i in range(len(players))}
+    for k in rp.kills:
+        if k.killer_uid is not None and k.killer_pid is not None and k.killer_pid < len(players):
+            uid_owner.setdefault(k.killer_uid, k.killer_pid)
+            uid_vehicle.setdefault(k.killer_uid, k.killer_vehicle)
     for k in rp.kills:
         if k.killer_pid is not None and k.killer_pid < len(players):
             vehicles.setdefault(k.killer_pid, k.killer_vehicle)
-        v_idx = None
-        if base is not None and k.victim_uid is not None and 0 <= k.victim_uid - base < len(players):
-            v_idx = k.victim_uid - base
+        v_idx = uid_owner.get(k.victim_uid) if k.victim_uid is not None else None
         ki = k.killer_pid if k.killer_pid is not None and k.killer_pid < len(players) else None
         db.insert(con, "replay_kills", {
             "session_id": sid, "ms": k.ms, "killer_idx": ki,
             "killer_name": players[ki].get("name") if ki is not None else None,
             "killer_vehicle": k.killer_vehicle, "victim_idx": v_idx,
             "victim_name": players[v_idx].get("name") if v_idx is not None else None,
-            "victim_vehicle": vehicles.get(v_idx) if v_idx is not None else None,
+            "victim_vehicle": uid_vehicle.get(k.victim_uid) or (vehicles.get(v_idx) if v_idx is not None else None),
             "weapon": k.weapon, "destroyed_weapon": k.destroyed_weapon,
             "me_killer": int(ki is not None and ki == my_idx),
             "me_victim": int(v_idx is not None and v_idx == my_idx)})
 
     row = {"file": path.name, "file_size": path.stat().st_size, "session_id": sid, "map_id": h.map_id,
-           "battle_class": h.battle_class, "level_settings": h.level_settings,
+           "battle_class": h.battle_class, "kind": kind, "level_settings": h.level_settings,
            "started": datetime.fromtimestamp(h.start_time).isoformat(timespec="seconds") if h.start_time else None,
            "end_s": (rp.end_ms or 0) / 1000 or res.get("timePlayed"), "n_players": len(players),
            "my_idx": my_idx, "parse_error": None, "version": REPLAY_VERSION}
@@ -110,7 +138,9 @@ def import_replay(con, path: Path, me: str) -> str:
         my_kill_veh = next((k.killer_vehicle for k in rp.kills if k.killer_pid == my_idx and k.killer_vehicle), None)
         by_score = sorted(range(len(players)), key=lambda i: -(players[i].get("score") or 0))
         team = [i for i in by_score if players[i].get("team") == p.get("team")]
-        row.update({"my_team": p.get("team"), "my_vehicle": my_kill_veh or veh, "my_vehicle_type": vtype,
+        my_veh = my_kill_veh or veh
+        vtype = dict(_lineup(info)).get(my_veh, vtype)
+        row.update({"my_team": p.get("team"), "my_vehicle": my_veh, "my_vehicle_type": vtype,
                     "my_rank": rank, "my_kills": p.get("kills"), "my_ground_kills": p.get("groundKills"),
                     "my_ai_kills": p.get("aiKills"), "my_deaths": p.get("deaths"), "my_assists": p.get("assists"),
                     "my_score": p.get("score"), "my_missile_evades": p.get("missileEvades"),
@@ -219,14 +249,16 @@ def rebuild_battles(con) -> int:
             rows[r["session_id"]] = {  # longest replay of a session wins (ORDER BY end_s)
                 "session_id": r["session_id"], "started": r["started"], "map_id": r["map_id"],
                 "map": names.get(r["map_id"]) or map_name(r["map_id"]), "mode": None,
-                "battle_class": r["battle_class"], "vehicle": r["my_vehicle"], "vehicle_type": r["my_vehicle_type"],
-                "result": None, "kills": r["my_kills"], "ground_kills": r["my_ground_kills"],
+                "battle_class": r["battle_class"], "kind": r["kind"], "vehicle": r["my_vehicle"],
+                "vehicle_type": r["my_vehicle_type"], "result": None,
+                "kills": (r["my_kills"] or 0) + ((r["my_ground_kills"] or 0) if r["kind"] == "ground" else 0),
+                "air_kills": r["my_kills"], "ground_kills": r["my_ground_kills"],
                 "deaths": r["my_deaths"], "assists": r["my_assists"], "score": r["my_score"],
                 "missile_evades": r["my_missile_evades"], "lobby_pos": r["lobby_pos"], "n_players": r["n_players"],
                 "team_pos": r["team_pos"], "end_s": r["end_s"], "has_replay": 1}
         for r in con.execute("SELECT * FROM results"):
             b = rows.setdefault(r["session_id"], {"session_id": r["session_id"], "map": r["map_name"],
-                                                  "has_replay": 0})
+                                                  "kind": battle_kind(None, r["mode"]), "has_replay": 0})
             b.update({"mode": r["mode"], "result": r["result"], "played_s": r["played_s"],
                       "activity": r["activity"], "total_sl": r["total_sl"], "total_rp": r["total_rp"],
                       "earned_sl": r["earned_sl"], "repair_sl": r["repair_sl"], "has_result": 1})

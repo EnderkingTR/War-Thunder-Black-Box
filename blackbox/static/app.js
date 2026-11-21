@@ -166,12 +166,12 @@ function formStrip(form) {
     <span><i class="sw" style="background:var(--neutral)"></i>Sonuç metni yok</span></div>`;
 }
 
-function compareTable(lob) {
+function compareTable(lob, kind = "air") {
   const rows = [["Sen", lob.me, "me"], ["Lobi ortalaması", lob.lobby, ""], ["Her maçın ilk 3'ü", lob.top3, ""]];
   const metrics = [
     ["Ort. skor", (r) => r.score, (v) => num(v)],
     ["K/D", (r) => (r.k == null ? null : r.d ? r.k / r.d : r.k), (v) => num(v, 2)],
-    ["Füzeden kaçış / maç", (r) => r.ev, (v) => num(v, 2)],
+    kind === "ground" ? ["Kill / maç", (r) => r.kpm, (v) => num(v, 2)] : ["Füzeden kaçış / maç", (r) => r.ev, (v) => num(v, 2)],
     ["Asist / maç", (r) => r.a, (v) => num(v, 2)],
   ];
   let s = `<table class="compare"><thead><tr><th></th>${metrics.map((m) => `<th>${m[0]}</th>`).join("")}</tr></thead><tbody>`;
@@ -213,8 +213,9 @@ function mountTable(container, cols, rows, opts) {
 
 // ---------------------------------------------------------------- pages
 async function pageSummary(view) {
-  const s = await api("summary", state.filters);
+  const [s, sk] = await Promise.all([api("summary", state.filters), api("skills", state.filters).catch(() => null)]);
   const t = s.totals;
+  const ground = s.kind === "ground";
   const known = (t.w || 0) + (t.l || 0);
   $("#fCount").textContent = `${t.n} maç`;
   if (!t.n) {
@@ -232,12 +233,15 @@ async function pageSummary(view) {
       { label: "K/D", value: ratio(t.k || 0, t.d), sub: `${t.k || 0} kill · ${t.d || 0} ölüm`, hl: true },
       { label: "Ortalama skor", value: num(t.score), sub: `asist ${t.a || 0}` },
       { label: "Lobi dilimi", value: lobbyPct, sub: "0 = lobinin en iyisi" },
-      { label: "Füzeden kaçış", value: num((t.ev || 0) / t.n, 1), unit: "/maç", sub: `toplam ${t.ev || 0}` },
+      ground
+        ? { label: "Kill / maç", value: num((t.k || 0) / t.n, 1), sub: `kara ${t.gk || 0} · hava ${(t.k || 0) - (t.gk || 0)}` }
+        : { label: "Füzeden kaçış", value: num((t.ev || 0) / t.n, 1), unit: "/maç", sub: `toplam ${t.ev || 0}` },
       { label: "SL / maç", value: num(t.sl), sub: t.nres ? `${t.nres} maçtan` : "sonuç metni yok" },
       { label: "RP / maç", value: num(t.rp), sub: t.nres ? `${t.nres} maçtan` : "sonuç metni yok" },
     ])}</section>
     ${panel("Son maçlar", formStrip(s.form), { cls: "c12", aside: `son ${s.form.length}`, flush: true })}
-    ${panel("Lobiyle kıyas", compareTable(s.lobby) + '<p class="note">Aynı maçlardaki diğer 31 oyuncuya göre. Lobi ortalaması iki takımı da kapsar.</p>', { cls: "c7" })}
+    ${sk ? panel("Güçlü ve zayıf yönler", findingList(sk.findings.slice(0, 4), { compact: true }), { cls: "c12", aside: `<a href="#/beceri">tüm analiz →</a>` }) : ""}
+    ${panel("Lobiyle kıyas", compareTable(s.lobby, s.kind) + `<p class="note">Aynı maçlardaki diğer ${Math.round(s.lobby.others || 0)} oyuncuya göre (maç başına ortalama). Lobi ortalaması iki takımı da kapsar.${ground ? " Kill = kara + hava." : ""}</p>`, { cls: "c7" })}
     ${panel("Ne zaman ölüyorsun", columnChart(s.death_timing.map((d) => ({ label: d.label, v: d.n, tip: `${d.label}. dakika: ${d.n} ölüm` })), { cls: "acc" }) + '<p class="note">Maç başından itibaren dakika. Replay verisinden.</p>', { cls: "c5" })}
     ${panel("Seni düşüren silahlar", barList(s.death_weapons, { cls: "loss" }), { cls: "c6", aside: '<a href="#/silahlar">tümü →</a>' })}
     ${panel("Kill aldığın silahlar", barList(s.kill_weapons, { cls: "acc" }), { cls: "c6", aside: "oyuncular + AI hedefler" })}
@@ -255,6 +259,7 @@ async function pageSummary(view) {
 }
 
 function battleCols() {
+  const ground = state.filters.type === "ground";
   return [
     { h: "Tarih", k: "started", f: (r) => `<span class="num">${dt(r.started)}</span>` },
     { h: "Harita", k: "map" },
@@ -264,7 +269,7 @@ function battleCols() {
     { h: "Ö", k: "deaths", n: true, f: (r) => r.deaths ?? "–" },
     { h: "Skor", k: "score", n: true, f: (r) => num(r.score) },
     { h: "Lobi", k: "lobby_pos", n: true, f: (r) => (r.lobby_pos ? `${r.lobby_pos}<span class="dim">/${r.n_players}</span>` : "–") },
-    { h: "Kaçış", k: "missile_evades", n: true, f: (r) => r.missile_evades ?? "–" },
+    ...(ground ? [] : [{ h: "Kaçış", k: "missile_evades", n: true, f: (r) => r.missile_evades ?? "–" }]),
     { h: "SL", k: "total_sl", n: true, f: (r) => num(r.total_sl) },
     { h: "RP", k: "total_rp", n: true, f: (r) => num(r.total_rp) },
     { h: "Veri", k: "has_replay", sort: false, f: (r) => `<span class="src">${r.has_replay ? "<b>R</b>" : "·"}${r.has_result ? "<b>S</b>" : "·"}${r.has_telemetry ? "<b>T</b>" : "·"}</span>` },
@@ -298,9 +303,9 @@ const KIND = { weak: ["Zayıf", "loss"], strong: ["Güçlü", "win"], note: ["No
 const CLS_SHORT = { radar: "Radar", ir: "IR", gun: "Top", sam: "SAM", none: "Kaza", other: "Diğer", unknown: "?" };
 const VERDICT = { good: ["Savunma var", "win"], weak: ["Zayıf", "loss"], none: ["Savunma yok", "loss"], "n/a": ["–", "none"] };
 
-function findingList(items) {
+function findingList(items, { compact = false } = {}) {
   if (!items.length) return empty("Henüz belirgin bir güçlü ya da zayıf yön yok.", "Daha fazla maç biriktikçe burası dolacak.");
-  return `<ol class="findings">${items.map((f) => {
+  return `<ol class="findings${compact ? " compact" : ""}">${items.map((f) => {
     const [label, cls] = KIND[f.kind];
     return `<li class="finding ${f.kind}${f.low_data ? " low" : ""}">
       <span class="tag ${cls}">${label}</span>
@@ -337,6 +342,7 @@ function aspectStack(r) {
 
 async function pageSkills(view) {
   const s = await api("skills", state.filters);
+  if (s.kind === "ground") return pageSkillsGround(view, s);
   const e = s.energy, lob = s.lobby, fd = s.first_death;
   const nDeaths = s.classes.reduce((a, c) => a + c.my_deaths, 0);
   $("#fCount").textContent = `${lob.n || 0} maç · ${s.defense.length} ölüm analizi`;
@@ -379,6 +385,31 @@ async function pageSkills(view) {
     { h: "Görülen", k: "style", cls: "dim wrap" },
     { h: "Değerlendirme", k: "verdict", f: (r) => `<span class="tag ${VERDICT[r.verdict][1]}">${VERDICT[r.verdict][0]}</span>` },
   ], s.defense, { key: "session_id", sortKey: "started", onRow: (k) => (location.hash = `#/mac/${k}`) });
+}
+
+function pageSkillsGround(view, s) {
+  const lob = s.lobby, fd = s.first_death, cov = s.coverage;
+  $("#fCount").textContent = `${lob.n || 0} maç`;
+  const mins = (ms) => (ms == null ? "–" : num(ms / 60000, 1));
+  const covTxt = cov.total ? `${cov.mapped}/${cov.total} ölüm eşleşti` : `${cov.mapped} ölüm`;
+  view.innerHTML = `<div class="page-title"><h1>Beceri</h1><span class="meta">Kara muharebeleri · ${lob.n || 0} replay · lobiyle kıyas</span></div>
+  <div class="grid">
+    ${panel("Güçlü ve zayıf yönler", findingList(s.findings), { cls: "c12", aside: "aynı maçlardaki lobiyle kıyas" })}
+    <section class="panel c12">${kpis([
+      { label: "K/D", value: lob.my_d ? num(lob.my_k / lob.my_d, 2) : "–", sub: `lobi ${lob.l_d ? num(lob.l_k / lob.l_d, 2) : "–"} · kara + hava`, hl: true },
+      { label: "Kill / maç", value: num(lob.my_kpm, 2), sub: `lobi ${num(lob.l_kpm, 2)}` },
+      { label: "Ölüm / maç", value: num(lob.my_dpm, 2), sub: `lobi ${num(lob.l_dpm, 2)}` },
+      { label: "Asist / maç", value: num(lob.my_a, 2), sub: `lobi ${num(lob.l_a, 2)}` },
+      { label: "İlk ölüm (ortanca)", value: mins(fd.me), unit: " dk", sub: `lobi ${mins(fd.lobby)} dk` },
+    ])}</section>
+    ${panel("Seni ne düşürüyor", pairBars(s.classes, "my_deaths", "lobby_deaths"), { cls: "c6", aside: `düşmanın araç türü · ${covTxt}` })}
+    ${panel("Neyi düşürüyorsun", pairBars(s.classes.filter((c) => c.id !== "none"), "my_kills", "lobby_kills"), { cls: "c6", aside: `hedefin araç türü · ${s.classes.reduce((a, c) => a + c.my_kills, 0)}/${lob.my_k || 0} kill eşleşti` })}
+    ${panel("Seni vuran mühimmat", pairBars(s.ammo, "my_deaths", "lobby_deaths"), { cls: "c6", aside: "tank / SPAA atışları · tahmini" })}
+    ${panel("Kullandığın mühimmat", pairBars(s.ammo, "my_kills", "lobby_kills"), { cls: "c6", aside: "tank / SPAA atışları · tahmini" })}
+  </div>
+  <p class="note">Kara maçlarında yeniden doğan araçlar replay'de yeni kimlik alır; bir ölüm ancak o araç daha önce bir şey vurduysa ya da ilk araçsa oyuncuya eşlenebilir.
+  Bu yüzden türe göre dağılım ölümlerin bir kısmından hesaplanır (${covTxt}). K/D, kill, ölüm ve asist sayıları maç sonu tablosundan geldiği için tamdır.
+  Mühimmat türü silah adından tahmin edilir.</p>`;
 }
 
 function rateBar(v, max = 1, cls = "") {

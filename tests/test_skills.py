@@ -31,5 +31,28 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(skills.defense_verdict("ir", {"def_max_g": 8})[1], "good")
 
 
+class GroundTest(unittest.TestCase):
+    def test_battle_kind(self):
+        from blackbox.importer import battle_kind
+        self.assertEqual(battle_kind("air_ground_Dom"), "ground")
+        self.assertEqual(battle_kind("base_dom"), "air")
+        self.assertEqual(battle_kind(None, "Fetih #2"), "ground")
+        self.assertEqual(battle_kind(None, "Operasyon"), "air")
+
+    def test_vehicle_group(self):
+        self.assertEqual(skills.vehicle_group("tank_destroyer", "120mm_m829a2"), "tank")
+        self.assertEqual(skills.vehicle_group("SPAA", "30mm_3UBR8"), "spaa")
+        self.assertEqual(skills.vehicle_group("assault", "us_gbu_39"), "air")
+        self.assertEqual(skills.vehicle_group("helicopter", "su_9M127"), "heli")
+        self.assertEqual(skills.vehicle_group("tank", None), "none")
+
+    def test_ammo(self):
+        cases = {"120mm_m829a2": "kinetic", "125mm_3bm46": "kinetic", "120mm_l27a1": "kinetic",
+                 "130mm_9m120_1": "atgm", "152mm_tow_2": "atgm", "125mm_3bk_18m": "heat",
+                 "152mm_3of25": "he", "30mm_3UBR8": "autocannon"}
+        for w, cls in cases.items():
+            self.assertEqual(skills.ground_ammo_class(w), cls, w)
+
+
 if __name__ == "__main__":
     unittest.main()

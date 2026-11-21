@@ -51,6 +51,9 @@ Araçlar, Grind. Sağ üstteki "İçe aktar" yeni replay/kayıtları alır; dör
 aynı maçlardaki lobiyle karşılaştırır; telemetrili maçlarda her ölümün son 15 saniyesine bakar (en yakın görünen
 düşmana göre notch / soğuk kaçış / tehdide doğru uçuş, radar irtifasıyla multipath, G, hız ve irtifa değişimi).
 Oyun füze atışını ve RWR'ı vermediği için tehdit, atan uçak değil en yakın görünen düşmandır.
+Kara filtresinde Beceri sayfası seni düşüren araç türünü (tank, SPAA, uçak, helikopter) ve mühimmat türünü
+lobiyle karşılaştırır; kara maçlarında kill = kara + hava kill. Yeniden doğan araçlar replay'de yeni kimlik
+aldığı için ölümlerin bir kısmı araç türüne eşlenemeyebilir; sayfa kaçının eşlendiğini gösterir.
 
 Filtreler (`stats` ve `battles`): `--vehicle fa_18c_late`, `--map İspanya`, `--last 20`,
 `--since 2026-11-01`, `--type air|ground|all` (varsayılan: air).

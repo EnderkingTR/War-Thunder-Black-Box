@@ -6,19 +6,14 @@ import json
 
 from . import names, session, skills
 
-AIR_TYPES = ("fighter", "assault", "bomber", "attacker")
 
 
 def build_where(f: dict, alias: str = "b") -> tuple[str, list]:
     conds, params = [], []
     kind = f.get("type") or "air"
-    ph = ", ".join("?" * len(AIR_TYPES))
-    if kind == "air":
-        conds.append(f"({alias}.vehicle_type IS NULL OR {alias}.vehicle_type IN ({ph}))")
-        params += AIR_TYPES
-    elif kind == "ground":
-        conds.append(f"{alias}.vehicle_type NOT IN ({ph})")
-        params += AIR_TYPES
+    if kind in ("air", "ground"):
+        conds.append(f"{alias}.kind = ?")
+        params.append(kind)
     if f.get("vehicle"):
         conds.append(f"{alias}.vehicle = ?")
         params.append(f["vehicle"])
@@ -87,16 +82,18 @@ def summary(con, f: dict) -> dict:
     bw = w + " AND b.has_replay = 1"
     lob = dict(con.execute(f"""WITH bs AS (SELECT session_id FROM battles b{bw})
         SELECT AVG(CASE WHEN is_me=1 THEN score END) my_score, AVG(CASE WHEN is_me=0 THEN score END) l_score,
-          SUM(CASE WHEN is_me=1 THEN kills END) my_k, SUM(CASE WHEN is_me=1 THEN deaths END) my_d,
-          SUM(CASE WHEN is_me=0 THEN kills END) l_k, SUM(CASE WHEN is_me=0 THEN deaths END) l_d,
+          SUM(CASE WHEN is_me=1 THEN mode_kills END) my_k, SUM(CASE WHEN is_me=1 THEN deaths END) my_d,
+          SUM(CASE WHEN is_me=0 THEN mode_kills END) l_k, SUM(CASE WHEN is_me=0 THEN deaths END) l_d,
           AVG(CASE WHEN is_me=1 THEN missile_evades END) my_ev, AVG(CASE WHEN is_me=0 THEN missile_evades END) l_ev,
-          AVG(CASE WHEN is_me=1 THEN assists END) my_a, AVG(CASE WHEN is_me=0 THEN assists END) l_a
+          AVG(CASE WHEN is_me=1 THEN assists END) my_a, AVG(CASE WHEN is_me=0 THEN assists END) l_a,
+          AVG(CASE WHEN is_me=1 THEN mode_kills END) my_kpm, AVG(CASE WHEN is_me=0 THEN mode_kills END) l_kpm,
+          1.0 * SUM(is_me = 0) / NULLIF(COUNT(DISTINCT session_id), 0) others
         FROM replay_players rp JOIN bs USING (session_id)""", p).fetchone())
     top = dict(con.execute(f"""WITH bs AS (SELECT session_id FROM battles b{bw}),
         r AS (SELECT rp.*, ROW_NUMBER() OVER (PARTITION BY rp.session_id ORDER BY rp.score DESC) rn
               FROM replay_players rp JOIN bs USING (session_id))
-        SELECT AVG(score) score, SUM(kills) k, SUM(deaths) d, AVG(missile_evades) ev, AVG(assists) a
-        FROM r WHERE rn <= 3""", p).fetchone())
+        SELECT AVG(score) score, SUM(mode_kills) k, SUM(deaths) d, AVG(missile_evades) ev, AVG(assists) a,
+          AVG(mode_kills) kpm FROM r WHERE rn <= 3""", p).fetchone())
 
     K = f"FROM replay_kills k JOIN battles b ON b.session_id = k.session_id{w}"
     death_ms = [r[0] for r in con.execute(f"SELECT k.ms {K} AND k.me_victim = 1", p)]
@@ -110,12 +107,14 @@ def summary(con, f: dict) -> dict:
         AVG(l.death_nearest_enemy_km) death_enemy_km, AVG(l.avg_alt_m) alt, AVG(l.avg_tas_kmh) tas,
         AVG(l.max_g) max_g, AVG(l.low_alt_share) low FROM lives l JOIN battles b ON b.match_id = l.match_id{w}""",
                            p).fetchone())
-    return {"totals": t, "lobby": {"me": {"score": lob["my_score"], "k": lob["my_k"], "d": lob["my_d"],
-                                          "ev": lob["my_ev"], "a": lob["my_a"]},
-                                   "lobby": {"score": lob["l_score"], "k": lob["l_k"], "d": lob["l_d"],
-                                             "ev": lob["l_ev"], "a": lob["l_a"]},
-                                   "top3": {"score": top["score"], "k": top["k"], "d": top["d"], "ev": top["ev"],
-                                            "a": top["a"]}},
+    return {"totals": t, "kind": f.get("type") or "air",
+            "lobby": {"me": {"score": lob["my_score"], "k": lob["my_k"], "d": lob["my_d"],
+                             "ev": lob["my_ev"], "a": lob["my_a"], "kpm": lob["my_kpm"]},
+                      "lobby": {"score": lob["l_score"], "k": lob["l_k"], "d": lob["l_d"],
+                                "ev": lob["l_ev"], "a": lob["l_a"], "kpm": lob["l_kpm"]},
+                      "top3": {"score": top["score"], "k": top["k"], "d": top["d"], "ev": top["ev"],
+                               "a": top["a"], "kpm": top["kpm"]},
+                      "others": lob["others"]},
             "death_timing": _bucket_minutes(death_ms), "death_weapons": death_weapons[:8],
             "kill_weapons": kill_weapons[:8], "recent": _decorate(recent), "form": list(reversed(form)),
             "telemetry": tel}
@@ -260,8 +259,13 @@ def _pct(x):
 def skill_report(con, f: dict) -> dict:
     w, p = build_where(f)
     K = f"FROM replay_kills k JOIN battles b ON b.session_id = k.session_id{w}"
+    J = K.replace(" JOIN battles b", " LEFT JOIN vehicle_types kt ON kt.vehicle = k.killer_vehicle"
+                                    " LEFT JOIN vehicle_types vt ON vt.vehicle = k.victim_vehicle JOIN battles b", 1)
     kills = _rows(con.execute(f"""SELECT k.session_id, k.ms, k.weapon, k.me_victim, k.me_killer, k.victim_idx,
-        k.killer_idx, k.destroyed_weapon {K} AND k.victim_name IS NOT NULL ORDER BY k.session_id, k.ms""", p))
+        k.killer_idx, k.destroyed_weapon, kt.type killer_type, vt.type victim_type {J}
+        AND k.victim_name IS NOT NULL ORDER BY k.session_id, k.ms""", p))
+    if f.get("type") == "ground":
+        return _ground_report(con, f, kills)
 
     # what kills you vs what kills everybody else in the same battles
     my_d = _class_counts([k["weapon"] for k in kills if k["me_victim"]])
@@ -272,20 +276,8 @@ def skill_report(con, f: dict) -> dict:
     classes = [{"id": c, "name": n, "my_deaths": my_d[c], "lobby_deaths": lob_d[c], "my_kills": my_k[c],
                 "lobby_kills": lob_k[c]} for c, n in skills.CLASSES.items()]
 
-    # first death time: you vs the lobby
-    first_death: dict = {}
-    for k in kills:
-        first_death.setdefault((k["session_id"], k["victim_idx"]), (k["ms"], k["me_victim"]))
-    my_fd = _median([ms for ms, me in first_death.values() if me])
-    lob_fd = _median([ms for ms, me in first_death.values() if not me])
-
-    bw = w + " AND b.has_replay = 1"
-    lob = dict(con.execute(f"""WITH bs AS (SELECT session_id FROM battles b{bw})
-        SELECT COUNT(DISTINCT session_id) n,
-          AVG(CASE WHEN is_me=1 THEN missile_evades END) my_ev, AVG(CASE WHEN is_me=0 THEN missile_evades END) l_ev,
-          SUM(CASE WHEN is_me=1 THEN kills END) my_k, SUM(CASE WHEN is_me=1 THEN deaths END) my_d,
-          SUM(CASE WHEN is_me=0 THEN kills END) l_k, SUM(CASE WHEN is_me=0 THEN deaths END) l_d
-        FROM replay_players rp JOIN bs USING (session_id)""", p).fetchone())
+    my_fd, lob_fd = _first_death(kills)
+    lob = _lobby(con, w, p)
 
     # telemetry: defensive window of every shot-down life, paired in order with the replay's kill weapon
     lives = _rows(con.execute(f"""SELECT l.*, b.session_id, b.started, b.map
@@ -318,9 +310,135 @@ def skill_report(con, f: dict) -> dict:
               "low_alt": _avg([l["low_alt_share"] for l in flown]), "max_g": _avg([l["max_g"] for l in flown]),
               "avg_tas": _avg([l["avg_tas_kmh"] for l in flown])}
 
-    return {"classes": classes, "first_death": {"me": my_fd, "lobby": lob_fd}, "lobby": lob,
+    return {"kind": "air", "classes": classes, "first_death": {"me": my_fd, "lobby": lob_fd}, "lobby": lob,
             "defense": defense, "energy": energy,
             "findings": _findings(classes, my_fd, lob_fd, lob, defense, energy)}
+
+
+def _first_death(kills) -> tuple:
+    """Median time of each player's first death: you vs the rest of the lobby (ms)."""
+    first: dict = {}
+    for k in kills:
+        first.setdefault((k["session_id"], k["victim_idx"]), (k["ms"], k["me_victim"]))
+    return (_median([ms for ms, me in first.values() if me]), _median([ms for ms, me in first.values() if not me]))
+
+
+def _lobby(con, w, p) -> dict:
+    bw = w + " AND b.has_replay = 1"
+    return dict(con.execute(f"""WITH bs AS (SELECT session_id FROM battles b{bw})
+        SELECT COUNT(DISTINCT session_id) n,
+          AVG(CASE WHEN is_me=1 THEN missile_evades END) my_ev, AVG(CASE WHEN is_me=0 THEN missile_evades END) l_ev,
+          SUM(CASE WHEN is_me=1 THEN mode_kills END) my_k, SUM(CASE WHEN is_me=1 THEN deaths END) my_d,
+          SUM(CASE WHEN is_me=0 THEN mode_kills END) l_k, SUM(CASE WHEN is_me=0 THEN deaths END) l_d,
+          AVG(CASE WHEN is_me=1 THEN assists END) my_a, AVG(CASE WHEN is_me=0 THEN assists END) l_a,
+          AVG(CASE WHEN is_me=1 THEN mode_kills END) my_kpm, AVG(CASE WHEN is_me=0 THEN mode_kills END) l_kpm,
+          AVG(CASE WHEN is_me=1 THEN deaths END) my_dpm, AVG(CASE WHEN is_me=0 THEN deaths END) l_dpm
+        FROM replay_players rp JOIN bs USING (session_id)""", p).fetchone())
+
+
+def _count_rows(keys: dict, mine: list, lobby: list, mine_k: list, lobby_k: list) -> list[dict]:
+    def cnt(xs):
+        out = {c: 0 for c in keys}
+        for x in xs:
+            out[x] = out.get(x, 0) + 1
+        return out
+    a, b, c, d = cnt(mine), cnt(lobby), cnt(mine_k), cnt(lobby_k)
+    return [{"id": k, "name": n, "my_deaths": a.get(k, 0), "lobby_deaths": b.get(k, 0), "my_kills": c.get(k, 0),
+             "lobby_kills": d.get(k, 0)} for k, n in keys.items()]
+
+
+def _ground_report(con, f, kills) -> dict:
+    w, p = build_where(f)
+    real = [k for k in kills if not k["destroyed_weapon"]]
+
+    def killer(k):
+        return skills.vehicle_group(k["killer_type"], k["weapon"])
+
+    def victim(k):
+        return skills.vehicle_group(k["victim_type"], "any")
+
+    others_killed = [k for k in real if not k["me_killer"] and k["killer_idx"] is not None]
+    by_killer = _count_rows(skills.GROUPS,
+                            [killer(k) for k in real if k["me_victim"]],
+                            [killer(k) for k in real if not k["me_victim"]],
+                            [victim(k) for k in real if k["me_killer"]],
+                            [victim(k) for k in others_killed])
+    # ammo only means something for ground-vs-ground: kills made by tanks / SPAA
+    gnd = [k for k in real if killer(k) in ("tank", "spaa")]
+    am = lambda k: skills.ground_ammo_class(k["weapon"])
+    ammo = _count_rows(skills.AMMO,
+                       [am(k) for k in gnd if k["me_victim"]],
+                       [am(k) for k in gnd if not k["me_victim"]],
+                       [am(k) for k in gnd if k["me_killer"]],
+                       [am(k) for k in gnd if not k["me_killer"] and k["killer_idx"] is not None])
+    my_fd, lob_fd = _first_death(kills)
+    lob = _lobby(con, w, p)
+    coverage = {"mapped": sum(1 for k in real if k["me_victim"]), "total": lob.get("my_d")}
+    return {"kind": "ground", "classes": by_killer, "ammo": ammo, "coverage": coverage,
+            "first_death": {"me": my_fd, "lobby": lob_fd},
+            "lobby": lob, "defense": [], "energy": {"n": 0},
+            "findings": _ground_findings(by_killer, ammo, my_fd, lob_fd, lob)}
+
+
+def _ground_findings(groups, ammo, my_fd, lob_fd, lob) -> list[dict]:
+    out = []
+
+    def add(kind, title, detail, n, min_n=5, hint=None):
+        out.append({"kind": kind, "title": title, "detail": detail, "n": n, "low_data": n < min_n, "hint": hint})
+
+    g = {c["id"]: c for c in groups}
+    my_total = sum(c["my_deaths"] for c in groups)
+    lob_total = sum(c["lobby_deaths"] for c in groups)
+    if my_total >= 5 and lob_total:
+        air_me = (g["air"]["my_deaths"] + g["heli"]["my_deaths"]) / my_total
+        air_lob = (g["air"]["lobby_deaths"] + g["heli"]["lobby_deaths"]) / lob_total
+        detail = f"Ölümlerinin {_pct(air_me)} kadarı uçak ya da helikopterden; aynı maçlardaki lobide {_pct(air_lob)}."
+        if air_me - air_lob >= 0.08:
+            add("weak", "Hava saldırılarına açıksın", detail, my_total, 8,
+                "Düşman uçağı uyarısında açık alanda durma; bina, ağaç ya da tepe arkasına geç, SPAA'ya yakın kal.")
+        elif air_lob - air_me >= 0.08:
+            add("strong", "Hava saldırılarından iyi korunuyorsun", detail, my_total, 8)
+        t_me, t_lob = g["tank"]["my_deaths"] / my_total, g["tank"]["lobby_deaths"] / lob_total
+        if t_me - t_lob >= 0.1:
+            add("weak", "Tank düellolarında sık düşüyorsun",
+                f"Ölümlerinin {_pct(t_me)} kadarı tanklardan; lobide {_pct(t_lob)}.", my_total, 8,
+                "Tepe arkasından (hull-down) ateş et, köşe başlarını önce kontrol et, ateş ettikten sonra yer değiştir.")
+        c_me, c_lob = g["none"]["my_deaths"] / my_total, g["none"]["lobby_deaths"] / lob_total
+        if c_me - c_lob >= 0.08:
+            add("weak", "Silahsız ölümler fazla",
+                f"Ölümlerinin {_pct(c_me)} kadarı silahsız (kaza, devrilme, çarpma); lobide {_pct(c_lob)}.",
+                my_total, 8)
+
+    if lob.get("my_d") and lob.get("l_d"):
+        mine, theirs = lob["my_k"] / lob["my_d"], lob["l_k"] / lob["l_d"]
+        detail = f"K/D {mine:.2f} (kara + hava kill); aynı maçlardaki lobi {theirs:.2f}."
+        if mine >= theirs * 1.2:
+            add("strong", "Lobiden yüksek K/D", detail, lob["n"] or 0)
+        elif mine <= theirs * 0.8:
+            add("weak", "K/D lobinin altında", detail, lob["n"] or 0)
+    if lob.get("my_a") is not None and lob.get("l_a"):
+        detail = f"Maç başına {lob['my_a']:.1f} asist; lobi {lob['l_a']:.1f}."
+        if lob["my_a"] >= lob["l_a"] * 1.3:
+            add("strong", "Takımına çok destek veriyorsun", detail, lob["n"] or 0)
+        elif lob["my_a"] <= lob["l_a"] * 0.7:
+            add("note", "Asistlerin lobinin altında", detail, lob["n"] or 0)
+    if my_fd and lob_fd:
+        diff = (lob_fd - my_fd) / 1000
+        detail = f"İlk ölümün ortanca {my_fd / 60000:.1f}. dakikada; lobide {lob_fd / 60000:.1f}. dakikada."
+        if diff >= 30:
+            add("weak", "Lobiden erken düşüyorsun", detail, my_total, 5,
+                "İlk dakikalarda bilinen kamp ve keskin nişancı noktalarından uzak dur, takımla birlikte ilerle.")
+        elif diff <= -30:
+            add("strong", "Lobiden uzun hayatta kalıyorsun", detail, my_total)
+
+    mk = sum(c["my_kills"] for c in ammo)
+    if mk >= 5:
+        top = max(ammo, key=lambda c: c["my_kills"])
+        add("note", f"Kara kill'lerinin çoğu: {top['name']}",
+            f"Kara hedeflerine aldığın kill'lerin {_pct(top['my_kills'] / mk)} kadarı bu mühimmatla.", mk)
+    order = {"weak": 0, "strong": 1, "note": 2}
+    out.sort(key=lambda x: (x["low_data"], order[x["kind"]]))
+    return out
 
 
 def _findings(classes, my_fd, lob_fd, lob, defense, energy) -> list[dict]:

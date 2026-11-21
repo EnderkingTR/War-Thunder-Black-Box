@@ -83,18 +83,12 @@ def table(rows, headers, indent="  "):
         print(indent + "  ".join(c.ljust(w) for c, w in zip(r, widths)))
 
 
-AIR_TYPES = ("fighter", "assault", "bomber", "attacker")
-
-
 def where(args, alias="b"):
     conds, params = [], []
     kind = getattr(args, "type", "air")
-    if kind == "air":
-        conds.append(f"({alias}.vehicle_type IS NULL OR {alias}.vehicle_type IN ({', '.join('?' * len(AIR_TYPES))}))")
-        params += list(AIR_TYPES)
-    elif kind == "ground":
-        conds.append(f"{alias}.vehicle_type NOT IN ({', '.join('?' * len(AIR_TYPES))})")
-        params += list(AIR_TYPES)
+    if kind in ("air", "ground"):
+        conds.append(f"{alias}.kind = ?")
+        params.append(kind)
     if getattr(args, "vehicle", None):
         conds.append(f"{alias}.vehicle LIKE ?")
         params.append(f"%{args.vehicle}%")
@@ -152,7 +146,7 @@ def cmd_stats(args):
     section("Genel")
     print(f"  Maç: {t['n']}  (replay: {t['hr'] or 0})   Galibiyet: {t['w'] or 0}   Mağlubiyet: {t['l'] or 0}   "
           f"Sonucu bilinmeyen: {t['n'] - known}   Kazanma oranı: {pct(t['w'] or 0, known)}")
-    print(f"  Hava kill: {t['k'] or 0}   Yer kill: {t['gk'] or 0}   Ölüm: {t['d'] or 0}   K/D: {ratio(t['k'] or 0, t['d'])}"
+    print(f"  Kill: {t['k'] or 0}   (yer hedefi: {t['gk'] or 0})   Ölüm: {t['d'] or 0}   K/D: {ratio(t['k'] or 0, t['d'])}"
           f"   Asist: {t['a'] or 0}")
     lobby = f"%{100 * t['lp']:.0f} (0 = lobinin en iyisi, 100 = en kötüsü)" if t["lp"] is not None else "-"
     print(f"  Ortalama skor: {num(t['sc'])}   Füzeden kaçış: {t['me'] or 0} "

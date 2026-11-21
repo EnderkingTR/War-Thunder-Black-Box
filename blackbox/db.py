@@ -15,7 +15,7 @@ from .analyze import ANALYZER_VERSION, Match
 from .session import ROOT
 
 DB_PATH = ROOT / "blackbox.db"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -48,7 +48,7 @@ CREATE INDEX IF NOT EXISTS events_match ON events(match_id);
 
 -- replays (.wrpl)
 CREATE TABLE IF NOT EXISTS replays (
-    file TEXT PRIMARY KEY, file_size INTEGER, session_id TEXT, map_id TEXT, battle_class TEXT,
+    file TEXT PRIMARY KEY, file_size INTEGER, session_id TEXT, map_id TEXT, battle_class TEXT, kind TEXT,
     level_settings TEXT, started TEXT, end_s REAL, n_players INTEGER, my_idx INTEGER,
     my_team INTEGER, my_vehicle TEXT, my_vehicle_type TEXT, my_rank INTEGER,
     my_kills INTEGER, my_ground_kills INTEGER, my_ai_kills INTEGER, my_deaths INTEGER,
@@ -60,8 +60,12 @@ CREATE TABLE IF NOT EXISTS replay_players (
     session_id TEXT, idx INTEGER, user_id TEXT, name TEXT, clan TEXT, team INTEGER,
     vehicle TEXT, vehicle_type TEXT, mrank INTEGER, country TEXT, platform TEXT,
     kills INTEGER, ground_kills INTEGER, ai_kills INTEGER, assists INTEGER, deaths INTEGER,
-    score INTEGER, missile_evades INTEGER, is_me INTEGER, PRIMARY KEY (session_id, idx)
+    score INTEGER, missile_evades INTEGER, is_me INTEGER,
+    mode_kills INTEGER,  -- kills that count in this battle's mode: air battles air kills, ground battles air + ground
+    PRIMARY KEY (session_id, idx)
 );
+-- every vehicle seen in any lineup, with its type (tank, SPAA, fighter, helicopter ...)
+CREATE TABLE IF NOT EXISTS vehicle_types (vehicle TEXT PRIMARY KEY, type TEXT);
 CREATE TABLE IF NOT EXISTS replay_kills (
     session_id TEXT, ms INTEGER, killer_idx INTEGER, killer_name TEXT, killer_vehicle TEXT,
     victim_idx INTEGER, victim_name TEXT, victim_vehicle TEXT, weapon TEXT, destroyed_weapon TEXT,
@@ -85,7 +89,8 @@ CREATE TABLE IF NOT EXISTS map_names (map_id TEXT PRIMARY KEY, name TEXT, source
 
 -- one row per battle, rebuilt after every import from the tables above
 CREATE TABLE IF NOT EXISTS battles (
-    session_id TEXT PRIMARY KEY, started TEXT, map_id TEXT, map TEXT, mode TEXT, battle_class TEXT,
+    session_id TEXT PRIMARY KEY, started TEXT, map_id TEXT, map TEXT, mode TEXT, battle_class TEXT, kind TEXT,
+    air_kills INTEGER,
     vehicle TEXT, vehicle_type TEXT, result TEXT, kills INTEGER, ground_kills INTEGER,
     deaths INTEGER, assists INTEGER, score INTEGER, missile_evades INTEGER, lobby_pos INTEGER,
     n_players INTEGER, team_pos INTEGER, end_s REAL, played_s INTEGER, activity INTEGER,

@@ -235,3 +235,51 @@ def defense_verdict(cls: str, w: dict) -> tuple[str, str]:
     if cls == "sam":
         return style, "good" if (low >= 0.5 or g >= 6) else "none"
     return style, "n/a"
+
+
+# ------------------------------------------------------------------ ground battles
+GROUPS = {
+    "tank": "Tank / tank avcısı",
+    "spaa": "Uçaksavar (SPAA)",
+    "air": "Uçak",
+    "heli": "Helikopter",
+    "none": "Silahsız (kaza / çarpma)",
+    "unknown": "Bilinmiyor",
+}
+_GROUP_OF_TYPE = {"tank": "tank", "medium_tank": "tank", "heavy_tank": "tank", "light_tank": "tank",
+                  "tank_destroyer": "tank", "spaa": "spaa", "fighter": "air", "assault": "air", "bomber": "air",
+                  "attacker": "air", "helicopter": "heli"}
+
+
+def vehicle_group(vtype: str | None, weapon: str | None) -> str:
+    if not weapon:
+        return "none"
+    return _GROUP_OF_TYPE.get((vtype or "").lower(), "unknown")
+
+
+AMMO = {
+    "kinetic": "Kinetik (APFSDS / APDS)",
+    "heat": "Kimyasal (HEAT)",
+    "atgm": "Tanksavar füzesi (ATGM)",
+    "he": "Patlayıcı (HE / topçu)",
+    "autocannon": "Otomatik top / makineli",
+    "other": "Diğer",
+}
+_ATGM = re.compile(r"9m1\d\d|9m_1|tow|hj_?\d|kornet|spike|milan|hot_|ss_11|akeron|pars|lahat|refleks|9m120|mim146")
+_HEAT = re.compile(r"heat|3bk|m830|dm12|jm12")
+_KINETIC = re.compile(r"apfsds|sabot|3bm|m829|m900|m833|m774|m735|m322|dm[1-6]3|jm33|l2[3-7]|ke_w|dtc|dtw|"
+                      r"type_?93|125_1|apds|apcr|xm885|_kc")
+_HE = re.compile(r"3of|^\d+mm_he|hesh|m107|artillery|rocket_launcher|_of_")
+
+
+def ground_ammo_class(w: str | None) -> str:
+    if not w:
+        return "other"
+    s = w.lower()
+    m = re.match(r"^(\d+)mm_", s)
+    if (m and int(m.group(1)) <= 40) or _GUN_IDS.match(s):
+        return "autocannon"
+    for cls, rx in (("atgm", _ATGM), ("heat", _HEAT), ("kinetic", _KINETIC), ("he", _HE)):
+        if rx.search(s):
+            return cls
+    return "other"

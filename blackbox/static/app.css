@@ -378,3 +378,7 @@ svg.chart .grid-label { font-family: var(--font-ui); font-size: 9px; fill: var(-
   .pairs { grid-template-columns: 1fr auto; }
   .pair-bars { grid-column: 1 / -1; }
 }
+.findings.compact .finding { padding: 10px 0; }
+.findings.compact .finding:first-child { padding-top: 0; }
+.findings.compact .finding:last-child { padding-bottom: 0; }
+.findings.compact h3 { font-size: 14px; }
