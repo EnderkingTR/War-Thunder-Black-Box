@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import time
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,12 +14,19 @@ ROOT = Path(__file__).resolve().parent.parent
 RECORDINGS_DIR = ROOT / "recordings"
 
 
+def is_complete(d: Path) -> bool:
+    """Finished sessions have meta.json; a raw events.jsonl untouched for 10 min is a crashed recorder."""
+    if (d / "meta.json").exists():
+        return True
+    raw = d / "events.jsonl"
+    return raw.exists() and time.time() - raw.stat().st_mtime > 600
+
+
 def list_sessions() -> list[Path]:
     if not RECORDINGS_DIR.exists():
         return []
     return sorted(d for d in RECORDINGS_DIR.iterdir()
-                  if d.is_dir() and not d.name.startswith("_")
-                  and ((d / "events.jsonl.gz").exists() or (d / "events.jsonl").exists()))
+                  if d.is_dir() and not d.name.startswith("_") and is_complete(d))
 
 
 def iter_records(session_dir: Path):
