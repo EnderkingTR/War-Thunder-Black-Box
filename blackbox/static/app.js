@@ -237,8 +237,8 @@ async function pageSummary(view) {
       ground
         ? { label: "Kill / maç", value: num((t.k || 0) / t.n, 1), sub: `kara ${t.gk || 0} · hava ${(t.k || 0) - (t.gk || 0)}` }
         : { label: "Füzeden kaçış", value: num((t.ev || 0) / t.n, 1), unit: "/maç", sub: `toplam ${t.ev || 0}` },
-      { label: "SL / maç", value: num(t.sl), sub: t.nres ? `${t.nres} maçtan` : "sonuç metni yok" },
-      { label: "RP / maç", value: num(t.rp), sub: t.nres ? `${t.nres} maçtan` : "sonuç metni yok" },
+      { label: "SL / maç", value: num(t.sl), sub: t.nres ? `${num(t.sl_min)} SL/dk · ${t.nres} maçtan` : "sonuç metni yok" },
+      { label: "RP / maç", value: num(t.rp), sub: t.nres ? `${num(t.rp_min)} RP/dk · ${t.nres} maçtan` : "sonuç metni yok" },
     ])}</section>
     ${panel("Son maçlar", formStrip(s.form), { cls: "c12", aside: `son ${s.form.length}`, flush: true })}
     ${sk ? panel("Güçlü ve zayıf yönler", findingList(topFindings(sk.findings), { compact: true }), { cls: "c12", aside: `<a href="#/beceri">tüm analiz →</a>` }) : ""}
@@ -405,13 +405,13 @@ async function pageSkills(view) {
 function basesPanel(b) {
   if (!b || !b.n) return "";
   const w = b.split.with, wo = b.split.without;
-  const row = (label, r) => (r ? `<tr><td>${label}</td><td class="n">${r.n}</td><td class="n">${num(r.rp)}</td><td class="n">${num(r.sl)}</td><td class="n">${num(r.score)}</td><td class="n">${num(r.kills, 2)}</td></tr>` : "");
+  const row = (label, r) => (r ? `<tr><td>${label}</td><td class="n">${r.n}</td><td class="n">${num(r.rp)}</td><td class="n">${num(r.rp_min)}</td><td class="n">${num(r.sl)}</td><td class="n">${num(r.sl_min)}</td><td class="n">${num(r.score)}</td><td class="n">${num(r.kills, 2)}</td></tr>` : "");
   return panel("Üs bombalama", kpis([
     { label: "Üs / maç", value: num(b.per_match, 2), sub: `toplam ${b.bases || 0} üs`, hl: true },
     { label: "Üs aldığın maç", value: num(100 * (b.share || 0)), unit: "%", sub: `${b.with_bases || 0} / ${b.n} maç` },
     { label: "En çok üs", value: b.best ?? "–", sub: "tek maçta" },
     { label: "Etki / maç", value: num(b.impact, 2), sub: "hava kill + üs" },
-  ]) + (w || wo ? `<table class="data"><thead><tr><th>Sonuç metni olan maçlar</th><th class="n">Maç</th><th class="n">RP</th><th class="n">SL</th><th class="n">Skor</th><th class="n">Kill</th></tr></thead><tbody>
+  ]) + (w || wo ? `<table class="data"><thead><tr><th>Sonuç metni olan maçlar</th><th class="n">Maç</th><th class="n">RP/maç</th><th class="n">RP/dk</th><th class="n">SL/maç</th><th class="n">SL/dk</th><th class="n">Skor</th><th class="n">Kill</th></tr></thead><tbody>
       ${row("Üs aldığın", w)}${row("Üs almadığın", wo)}</tbody></table>` : "") +
     `<p class="note">Üs, ton hasarına göre değil <b>alınan üs sayısına</b> göre sayılır. Sayı sonuç metnindeki "Yok edilen üsler" satırlarından gelir.
     Sonuç metni olmayan maçlarda (≈) o uçakla verdiğin üs hasarının sonuç metinli maçlardaki üs başına ortalamasıyla tahmin edilir. Hiç sonuç metni olmayan uçaklar tahmin edilmez.
@@ -443,8 +443,8 @@ function pageSkillsGround(view, s) {
   Mühimmat türü silah adından tahmin edilir.</p>`;
 }
 
-function rateBar(v, max = 1, cls = "") {
-  return v == null ? "–" : `<span class="num">${num(v, 2)}</span><span class="inline-bar ${cls}" style="width:${Math.min(60, (60 * v) / (max || 1))}px"></span>`;
+function rateBar(v, max = 1, cls = "", digits = 2) {
+  return v == null ? "–" : `<span class="num">${num(v, digits)}</span><span class="inline-bar ${cls}" style="width:${Math.min(60, (60 * v) / (max || 1))}px"></span>`;
 }
 
 async function pageMaps(view) {
@@ -452,9 +452,14 @@ async function pageMaps(view) {
   $("#fCount").textContent = `${rows.length} harita`;
   const maxKd = Math.max(...rows.map((r) => (r.d ? r.k / r.d : r.k || 0)), 0.01);
   rows.forEach((r) => { r.kd = r.k == null ? null : r.d ? r.k / r.d : r.k; r.wr = (r.w || 0) + (r.l || 0) ? r.w / (r.w + r.l) : null; r.top = r.lobby == null ? null : 1 - r.lobby; });
+  const ground = state.filters.type === "ground";
+  rows.forEach((r) => { r.bpm = r.nb ? r.bases / r.nb : null; });
+  const maxBpm = Math.max(...rows.map((r) => r.bpm || 0), 0.01);
+  const maxRpm = Math.max(...rows.map((r) => r.rp_min || 0), 1);
   view.innerHTML = `<div class="page-title"><h1>Haritalar</h1><span class="meta">Hangi haritada iyisin, hangisinde zorlanıyorsun</span></div>
-    <div class="grid">${panel("Harita performansı", '<div id="mt"></div>', { flush: true, aside: "başlığa tıkla: sırala" })}</div>
-    <p class="note">Lobi dilimi: maçın kaçta kaçındasın (0 = en iyi). Kazanma oranı yalnızca sonuç metni olan maçlardan.</p>`;
+    <div class="grid">${ground ? "" : mapBaseHighlights(rows)}${panel("Harita performansı", '<div id="mt"></div>', { flush: true, aside: "başlığa tıkla: sırala" })}</div>
+    <p class="note">Lobi dilimi: maçın kaçta kaçındasın (0 = en iyi). Kazanma oranı ve RP/dk yalnızca sonuç metni olan maçlardan.
+    ${ground ? "" : "Üs/maç sonuç metni olan maçlarda kesin, olmayanlarda tahmini (≈). İlk üs: sonuç metnindeki ilk yok edilen üssün dakikası. İlk ölüm: replay'deki ilk ölümün dakikası."}</p>`;
   mountTable($("#mt", view), [
     { h: "Harita", k: "map" },
     { h: "Maç", k: "n", n: true },
@@ -464,8 +469,25 @@ async function pageMaps(view) {
     { h: "K/D", k: "kd", n: true, f: (r) => rateBar(r.kd, maxKd, "acc") },
     { h: "Ort. skor", k: "score", n: true, f: (r) => num(r.score) },
     { h: "Lobi dilimi", k: "top", n: true, f: (r) => (r.lobby == null ? "–" : `%${Math.round(100 * r.lobby)}`) },
-    { h: "Kaçış", k: "ev", n: true },
+    ...(ground ? [] : [
+      { h: "Üs/maç", k: "bpm", n: true, f: (r) => (r.bpm == null ? '<span class="dim">–</span>' : rateBar(r.bpm, maxBpm, "acc")) },
+      { h: "İlk üs", k: "first_base_s", n: true, f: (r) => (r.first_base_s == null ? '<span class="dim">–</span>' : mmss(r.first_base_s)) },
+      { h: "İlk ölüm", k: "first_death_s", n: true, f: (r) => (r.first_death_s == null ? '<span class="dim">–</span>' : mmss(r.first_death_s)) },
+      { h: "Kaçış", k: "ev", n: true },
+    ]),
+    { h: "RP/dk", k: "rp_min", n: true, f: (r) => (r.rp_min == null ? '<span class="dim">–</span>' : rateBar(r.rp_min, maxRpm, "s2", 0)) },
+    { h: "SL/dk", k: "sl_min", n: true, f: (r) => (r.sl_min == null ? '<span class="dim">–</span>' : num(r.sl_min)) },
   ], rows, { sortKey: "n" });
+}
+
+// best and worst maps for base bombing (needs at least 3 battles with a known base count)
+function mapBaseHighlights(rows) {
+  const ok = rows.filter((r) => r.nb >= 3).sort((a, b) => b.bpm - a.bpm);
+  if (ok.length < 2) return "";
+  const line = (r) => `<li><b>${esc(r.map)}</b> <span class="dim">· ${num(r.bpm, 1)} üs/maç · ${r.base_matches}/${r.nb} maçta üs${r.rp_min ? ` · ${num(r.rp_min)} RP/dk` : ""}${r.first_base_s != null ? ` · ilk üs ${mmss(r.first_base_s)}` : ""}</span></li>`;
+  const best = ok.slice(0, 3), worst = ok.slice(-3).reverse().filter((r) => !best.includes(r));
+  return panel("Üs bombalamaya en uygun haritalar", `<ul class="map-hl">${best.map(line).join("")}</ul>`, { cls: "c6", aside: "en az 3 maç" }) +
+    (worst.length ? panel("Üs almakta zorlandığın haritalar", `<ul class="map-hl">${worst.map(line).join("")}</ul>`, { cls: "c6", aside: "en az 3 maç" }) : "");
 }
 
 async function pageVehicles(view) {
@@ -484,13 +506,16 @@ async function pageVehicles(view) {
     { h: "K/D", k: "kd", n: true, f: (r) => rateBar(r.kd, maxKd, "acc") },
     { h: "Ort. skor", k: "score", n: true, f: (r) => num(r.score) },
     { h: "Lobi dilimi", k: "lobby", n: true, f: (r) => (r.lobby == null ? "–" : `%${Math.round(100 * r.lobby)}`) },
+    ...(state.filters.type === "ground" ? [] : [{ h: "Üs/maç", k: "bases", n: true, f: (r) => (r.nb ? num(r.bases / r.nb, 2) + (r.nb < r.n ? ` <span class="dim" title="Üs sayısı bilinen maç">(${r.nb} maç)</span>` : "") : '<span class="dim">–</span>') }]),
     { h: "SL/maç", k: "sl", n: true, f: (r) => num(r.sl) },
     { h: "RP/maç", k: "rp", n: true, f: (r) => num(r.rp) },
+    { h: "RP/dk", k: "rp_min", n: true, f: (r) => num(r.rp_min) },
+    { h: "SL/dk", k: "sl_min", n: true, f: (r) => num(r.sl_min) },
   ], rows, { sortKey: "n", key: "vehicle", onRow: (k) => { state.filters.vehicle = k; store.set("bb-filters", state.filters); $("#fVehicle").value = k; location.hash = "#/ozet"; } });
 }
 
 async function pageGrind(view) {
-  const g = await api("grind", state.filters);
+  const [g, miss] = await Promise.all([api("grind", state.filters), api("missing", state.filters)]);
   const t = g.totals;
   $("#fCount").textContent = `${t.n} sonuç metni`;
   if (!t.n) {
@@ -511,7 +536,18 @@ async function pageGrind(view) {
     ])}</section>
     ${panel("Maç başı kazanç", grindChart(g.battles), { cls: "c12", aside: "net SL ve RP" })}
     ${panel("Araca göre", '<div id="gv"></div>', { cls: "c12", flush: true })}
-  </div>`;
+    ${panel("Sonuç metni eksik maçlar", '<div id="gm"></div>', { cls: "c12", flush: true, aside: "hangarda bildirimden kopyala" })}
+  </div>
+  <p class="note">Sonuç metni eksik maçlarda SL/RP, kesin üs sayısı ve kazanma bilgisi yok. Hangardaki bildirimlerde
+  savaş sonucu bildiriminde <b>kopyala</b>ya bas; BlackBox açıkken (BlackBox.bat) metin otomatik kaydedilir ve birkaç saniye içinde içe aktarılır.</p>`;
+  const box = $("#gm", view);
+  if (!miss.length) box.innerHTML = empty("Eksik yok.", "Her maçın sonuç metni kayıtlı.");
+  else mountTable(box, [
+      { h: "Tarih", k: "started", f: (r) => `<span class="num">${dt(r.started)}</span>` },
+      { h: "Harita", k: "map" }, { h: "Araç", k: "vehicle_name" },
+      { h: "K", k: "kills", n: true }, { h: "Ö", k: "deaths", n: true }, { h: "Skor", k: "score", n: true, f: (r) => num(r.score) },
+      { h: "Süre", k: "end_s", n: true, f: (r) => mmss(r.end_s) },
+    ], miss, { key: "session_id", sortKey: "started", onRow: (k) => (location.hash = `#/mac/${k}`) });
   mountTable($("#gv", view), [
     { h: "Araç", k: "vehicle_name" }, { h: "Maç", k: "n", n: true },
     { h: "SL/maç", k: "sl", n: true, f: (r) => num(r.sl) }, { h: "RP/maç", k: "rp", n: true, f: (r) => num(r.rp) },
@@ -766,6 +802,24 @@ async function runImport() {
   }
 }
 
+// the server imports by itself when started with "start"; refresh the page when a new import finishes
+let importSeq = null;
+async function watchImports() {
+  try {
+    const st = await api("import");
+    if (!st.auto) return;
+    if (importSeq !== null && st.seq !== importSeq && !st.running && !$("#importBtn").disabled) {
+      if (st.last && (st.last.telemetry || st.last.replays || st.last.results)) {
+        toast(`Otomatik içe aktarıldı: telemetri ${st.last.telemetry} · replay ${st.last.replays} · sonuç ${st.last.results} yeni.`);
+        await loadFilterOptions();
+        route();
+      }
+    }
+    if (!st.running) importSeq = st.seq;
+  } catch (e) { /* server restarting */ }
+  setTimeout(watchImports, 8000);
+}
+
 function toast(msg) {
   const el = document.createElement("div");
   el.className = "toast";
@@ -812,4 +866,5 @@ async function route() {
   await loadFilterOptions();
   addEventListener("hashchange", route);
   route();
+  watchImports();
 })();

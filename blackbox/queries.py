@@ -79,7 +79,7 @@ def summary(con, f: dict) -> dict:
         AVG(1.0 * (lobby_pos - 1) / NULLIF(n_players - 1, 0)) lobby, SUM(has_result) nres,
         AVG(total_sl) sl, AVG(total_rp) rp, SUM(played_s) played,
         SUM(bases_est) bases, COUNT(bases_est) nbases, SUM(bases_est > 0) nbase_battles,
-        SUM(CASE WHEN bases_est IS NOT NULL THEN air_kills END) bk FROM battles b{w}""", p).fetchone())
+        SUM(CASE WHEN bases_est IS NOT NULL THEN air_kills END) bk, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_rp END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) rp_min, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_sl END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) sl_min FROM battles b{w}""", p).fetchone())
 
     bw = w + " AND b.has_replay = 1"
     lob = dict(con.execute(f"""WITH bs AS (SELECT session_id FROM battles b{bw})
@@ -205,17 +205,25 @@ def weapons(con, f: dict) -> dict:
 
 def maps(con, f: dict) -> list[dict]:
     w, p = build_where(f)
-    return _rows(con.execute(f"""SELECT map, COUNT(*) n, SUM(result='win') w, SUM(result='loss') l, SUM(kills) k,
+    return _rows(con.execute(f"""
+        WITH fb AS (SELECT session_id, MIN(time_s) t FROM result_items WHERE category = 'Yok edilen üsler'
+                    GROUP BY session_id),
+             fd AS (SELECT session_id, MIN(ms) / 1000.0 t FROM replay_kills WHERE me_victim = 1 GROUP BY session_id)
+        SELECT map, COUNT(*) n, SUM(result='win') w, SUM(result='loss') l, SUM(kills) k,
         SUM(deaths) d, AVG(score) score, AVG(1.0 * (lobby_pos - 1) / NULLIF(n_players - 1, 0)) lobby,
-        SUM(missile_evades) ev, AVG(total_sl) sl, AVG(total_rp) rp
-        FROM battles b{w} GROUP BY map ORDER BY n DESC""", p))
+        SUM(missile_evades) ev, AVG(total_sl) sl, AVG(total_rp) rp, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_rp END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) rp_min, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_sl END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) sl_min,
+        SUM(bases_est) bases, COUNT(bases_est) nb, SUM(bases_est > 0) base_matches,
+        AVG(fb.t) first_base_s, AVG(fd.t) first_death_s
+        FROM battles b LEFT JOIN fb USING (session_id) LEFT JOIN fd USING (session_id){w}
+        GROUP BY map ORDER BY n DESC""", p))
 
 
 def vehicles(con, f: dict) -> list[dict]:
     w, p = build_where(f)
     rows = _rows(con.execute(f"""SELECT vehicle, vehicle_type, COUNT(*) n, SUM(result='win') w, SUM(result='loss') l,
         SUM(kills) k, SUM(deaths) d, AVG(score) score, AVG(1.0 * (lobby_pos - 1) / NULLIF(n_players - 1, 0)) lobby,
-        SUM(missile_evades) ev, AVG(total_sl) sl, AVG(total_rp) rp, SUM(has_result) nres
+        SUM(missile_evades) ev, AVG(total_sl) sl, AVG(total_rp) rp, SUM(has_result) nres, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_rp END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) rp_min, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_sl END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) sl_min,
+        SUM(bases_est) bases, COUNT(bases_est) nb
         FROM battles b{w} GROUP BY vehicle ORDER BY n DESC""", p))
     return _decorate(rows)
 
@@ -234,6 +242,12 @@ def grind(con, f: dict) -> dict:
         AVG(repair_sl) repair, SUM(played_s) played, SUM(total_sl) sum_sl, SUM(total_rp) sum_rp
         FROM battles b{w} GROUP BY vehicle ORDER BY n DESC""", p)))
     return {"battles": rows, "totals": agg, "by_vehicle": by_vehicle}
+
+
+def missing_results(con, f: dict) -> list[dict]:
+    w, p = build_where(f)
+    return _decorate(_rows(con.execute(f"""SELECT session_id, started, map, vehicle, kills, deaths, score, end_s
+        FROM battles b{w} AND b.has_result = 0 AND b.has_replay = 1 ORDER BY started DESC""", p)))
 
 
 # ------------------------------------------------------------------ skills
@@ -329,7 +343,8 @@ def _bases(con, w, p) -> dict:
         FROM battles b{w} AND b.bases_est IS NOT NULL""", p).fetchone())
     # grind effect: only battles with a result text have exact RP/SL and an exact base count
     split = _rows(con.execute(f"""SELECT bases > 0 took, COUNT(*) n, AVG(total_rp) rp, AVG(total_sl) sl,
-        AVG(score) score, AVG(air_kills) kills FROM battles b{w} AND b.has_result = 1 GROUP BY 1""", p))
+        AVG(score) score, AVG(air_kills) kills, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_rp END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) rp_min, 60.0 * SUM(CASE WHEN has_result = 1 THEN total_sl END) / NULLIF(SUM(CASE WHEN has_result = 1 THEN played_s END), 0) sl_min
+        FROM battles b{w} AND b.has_result = 1 GROUP BY 1""", p))
     b["split"] = {("with" if r["took"] else "without"): r for r in split}
     n = b["n"] or 0
     b["per_match"] = (b["bases"] or 0) / n if n else None
@@ -571,9 +586,11 @@ def _findings(classes, my_fd, lob_fd, lob, defense, energy, bases=None) -> list[
         elif pm > 0:
             add("note", "Arada üs alıyorsun", detail, n, 5)
         if w_ and wo and w_["rp"] and wo["rp"] and w_["n"] >= 3 and wo["n"] >= 3 and w_["rp"] >= 1.5 * wo["rp"]:
+            per_min = (f" Dakika başına: {_num(w_['rp_min'])} RP'ye karşı {_num(wo['rp_min'])} RP."
+                       if w_.get("rp_min") and wo.get("rp_min") else "")
             add("strong", f"Üs almak grind'ını {w_['rp'] / wo['rp']:.1f} kat artırıyor",
                 f"Sonuç metni olan {w_['n'] + wo['n']} maçta: üs aldığın {w_['n']} maçın ortalaması "
-                f"{_num(w_['rp'])} RP, almadığın {wo['n']} maçın {_num(wo['rp'])} RP.",
+                f"{_num(w_['rp'])} RP, almadığın {wo['n']} maçın {_num(wo['rp'])} RP.{per_min}",
                 w_["n"] + wo["n"], 6)
             out[-1]["prio"] = 1
     order = {"weak": 0, "strong": 1, "note": 2}

@@ -10,6 +10,7 @@
     python -m blackbox name-map <map_id> <ad>   bir haritaya isim ver
     python -m blackbox unknown                  tanınmayan kill feed satırları
     python -m blackbox web                      web arayüzünü aç (http://127.0.0.1:8765)
+    python -m blackbox start                    hepsi bir arada: kaydedici + pano + otomatik içe aktarma + arayüz
 
 Filtreler: --vehicle fa_18c  --map İspanya  --last 20  --since 2026-11-01  --type air|ground|all
 """
@@ -352,6 +353,25 @@ def cmd_web(args):
     web.serve(me, replay_dir, port=args.port, open_browser=not args.no_browser)
 
 
+def cmd_start(args):
+    """Recorder (8111 telemetry) in a child process, web UI with clipboard watcher and auto import here."""
+    import subprocess
+    from . import web
+    me = require_player()
+    replay_dir = Path(load_config().get("replay_dir") or importer.DEFAULT_REPLAY_DIR)
+    rec = None
+    if not args.no_recorder:
+        rec = subprocess.Popen([sys.executable, str(ROOT / "recorder" / "record.py"), "--no-clipboard"], cwd=ROOT)
+    try:
+        web.serve(me, replay_dir, port=args.port, open_browser=not args.no_browser, auto=True)
+    finally:
+        if rec and rec.poll() is None:
+            try:
+                rec.wait(timeout=5)  # Ctrl+C reaches the recorder too; let it save the running match
+            except subprocess.TimeoutExpired:
+                rec.terminate()
+
+
 def cmd_unknown(args):
     con = db.connect()
     rows = con.execute("SELECT raw, COUNT(*) n FROM events WHERE kind = 'other' GROUP BY raw ORDER BY n DESC").fetchall()
@@ -389,6 +409,9 @@ def main():
     sp = sub.add_parser("unknown"); sp.set_defaults(f=cmd_unknown)
     sp = sub.add_parser("web"); sp.add_argument("--port", type=int, default=8765)
     sp.add_argument("--no-browser", action="store_true"); sp.set_defaults(f=cmd_web)
+    sp = sub.add_parser("start"); sp.add_argument("--port", type=int, default=8765)
+    sp.add_argument("--no-browser", action="store_true"); sp.add_argument("--no-recorder", action="store_true")
+    sp.set_defaults(f=cmd_start)
     args = ap.parse_args()
     args.f(args)
 

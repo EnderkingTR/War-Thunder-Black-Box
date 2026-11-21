@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import sys
 import threading
+import time
 import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,7 +21,7 @@ from . import db, importer, queries
 
 STATIC = Path(__file__).resolve().parent / "static"
 _import_lock = threading.Lock()
-_import_state = {"running": False, "last": None, "error": None, "log": []}
+_import_state = {"running": False, "last": None, "error": None, "log": [], "seq": 0, "auto": False}
 
 
 def _filters(qs: dict) -> dict:
@@ -97,6 +99,8 @@ def make_handler(me: str, replay_dir: Path):
                     return self._json(queries.vehicles(con, f))
                 if route == "grind":
                     return self._json(queries.grind(con, f))
+                if route == "missing":
+                    return self._json(queries.missing_results(con, f))
                 if route == "import":
                     return self._json(_import_state)
                 if route == "me":
@@ -120,19 +124,67 @@ def start_import(me: str, replay_dir: Path) -> dict:
             _import_state["error"] = f"{type(e).__name__}: {e}"
         finally:
             _import_state["running"] = False
+            _import_state["seq"] += 1
             _import_lock.release()
 
     threading.Thread(target=job, daemon=True).start()
     return {**_import_state, "running": True}
 
 
-def serve(me: str, replay_dir: Path, port: int = 8765, open_browser: bool = True) -> None:
+def _signature(replay_dir: Path) -> tuple:
+    """Cheap fingerprint of everything an import reads: finished recordings, replays, result texts."""
+    from . import session
+    sig = []
+    for d, pat in ((replay_dir, "*.wrpl"), (importer.RESULTS_DIR, "*.txt")):
+        try:
+            files = list(d.glob(pat)) if d.exists() else []
+            sig.append((len(files), max((f.stat().st_mtime for f in files), default=0)))
+        except OSError:
+            sig.append(None)
+    sig.append(len(session.list_sessions()))
+    return tuple(sig)
+
+
+def _auto_import(me: str, replay_dir: Path, interval: float = 10) -> None:
+    """Imports on start and again whenever a new replay, recording or result text appears.
+    Waits until the files stop changing for one interval so a replay still being written is not read."""
+    last = None
+    pending = None
+    while True:
+        try:
+            sig = _signature(replay_dir)
+            if sig != last:
+                if pending == sig or last is None:
+                    start_import(me, replay_dir)
+                    last, pending = sig, None
+                else:
+                    pending = sig
+        except Exception:
+            traceback.print_exc()
+        time.sleep(interval)
+
+
+def _clipboard(on_saved) -> None:
+    """Runs the recorder's clipboard watcher inside the web server (battle result texts)."""
+    rec = Path(__file__).resolve().parent.parent / "recorder"
+    sys.path.insert(0, str(rec))
+    import clipboard_watch
+    clipboard_watch.start_background(on_saved)
+
+
+def serve(me: str, replay_dir: Path, port: int = 8765, open_browser: bool = True, auto: bool = False) -> None:
     mimetypes.add_type("application/javascript", ".js")
     mimetypes.add_type("text/css", ".css")
     db.connect().close()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(me, replay_dir))
     url = f"http://127.0.0.1:{port}/"
     print(f"BlackBox arayüzü: {url}   (kapatmak için Ctrl+C)")
+    if auto:
+        _import_state["auto"] = True
+        if sys.platform == "win32":
+            _clipboard(lambda title: print(f"[SONUÇ] kaydedildi: {title}"))
+            print("Pano izleniyor: hangarda savaş sonucunu kopyaladığında otomatik kaydedilir.")
+        threading.Thread(target=_auto_import, args=(me, replay_dir), name="auto-import", daemon=True).start()
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:

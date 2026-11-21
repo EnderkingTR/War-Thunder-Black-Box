@@ -382,3 +382,9 @@ svg.chart .grid-label { font-family: var(--font-ui); font-size: 9px; fill: var(-
 .findings.compact .finding:first-child { padding-top: 0; }
 .findings.compact .finding:last-child { padding-bottom: 0; }
 .findings.compact h3 { font-size: 14px; }
+
+/* map highlights (base bombing) */
+.map-hl { list-style: none; margin: 0; padding: 0; }
+.map-hl li { padding: 8px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.map-hl li:last-child { border-bottom: 0; }
+.map-hl .dim { font-size: 12px; }

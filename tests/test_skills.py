@@ -76,5 +76,21 @@ class BasesTest(unittest.TestCase):
         self.assertEqual([f["kind"] for f in out if f["title"].startswith("K/D")], ["weak"])
 
 
+class QueriesSmokeTest(unittest.TestCase):
+    """New grind/map queries run against an empty in-memory schema."""
+
+    def test_queries_on_empty_db(self):
+        import sqlite3
+        from blackbox import db, queries
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript(db.SCHEMA)
+        f = {"type": "air"}
+        self.assertEqual(queries.maps(con, f), [])
+        self.assertEqual(queries.missing_results(con, f), [])
+        self.assertEqual(queries.vehicles(con, f), [])
+        self.assertIsNone(queries.summary(con, f)["totals"]["rp_min"])
+
+
 if __name__ == "__main__":
     unittest.main()

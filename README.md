@@ -25,6 +25,15 @@ Gereksinim: Python 3.14+ (replay sıkıştırması için standart kütüphanedek
 python -m blackbox setup ENDERKING_tr
 ```
 
+### Tek tıkla (önerilen)
+
+Oynamadan önce proje klasöründeki **`BlackBox.bat`**'a çift tıkla (masaüstüne kısayol için: sağ tık → Gönder →
+Masaüstü). Hepsini birlikte açar: telemetri kaydedici, pano izleyici, web arayüzü ve **otomatik içe aktarma**
+(yeni replay, kayıt ya da kopyalanan sonuç metni gelince birkaç saniye içinde aktarılır, açık sayfa kendini yeniler).
+Kapatmak için pencerede Ctrl+C. Aynısı komutla: `python -m blackbox start`.
+
+### Ayrı ayrı
+
 Oynamadan önce recorder'ı başlat (telemetri + pano izleyici):
 ```powershell
 python recorder/record.py
@@ -45,6 +54,9 @@ python -m blackbox web
 Tarayıcıda `http://127.0.0.1:8765` açılır (yalnızca bu bilgisayardan erişilir). Sayfalar: Özet, Maçlar
 (tıklayınca maç detayı: zaman çizelgesi, uçuş profili, rota, ödüller, takımlar), Beceri, Silahlar, Haritalar,
 Araçlar, Grind. Sağ üstteki "İçe aktar" yeni replay/kayıtları alır; dört renk teması vardır.
+Haritalar sayfası her harita için üs/maç, ilk üssün ve ilk ölümün ortalama dakikası ve RP/SL dakika başına
+kazancı gösterir; üs bombalamaya en uygun ve en zor haritaları öne çıkarır. Grind sayfasının altında sonuç metni
+eksik maçların listesi vardır: bunların bildirimini hangarda kopyalarsan eksikler kapanır.
 `--port 9000` ve `--no-browser` seçenekleri var.
 
 **Beceri sayfası** tahmini bir analizdir: replay'lerden seni neyin düşürdüğünü (radar/IR füze, top, SAM, kaza)
