@@ -4,6 +4,17 @@ Bu projedeki önemli değişiklikler bu dosyada tutulur. Biçim [Keep a Changelo
 esaslıdır; sürüm numaraları [Anlamsal Sürümleme](https://semver.org/lang/tr/) kurallarını izler.
 1.0'dan önceki sürümler geriye dönük olarak commit geçmişinden çıkarılmıştır.
 
+## [0.12.0] - 2026-11-22
+
+### Eklendi
+- Maç sayfasında **Dışa aktar**: PDF, PNG, CSV ve JSON.
+  - PDF ve PNG, maç sayfasının üst çubuk ve düğmeler olmadan, seçili temayla birebir görüntüsü; bilgisayardaki Chrome
+    ya da Edge pencere açmadan çizer. Ek kütüphane gerekmez.
+  - **Kopyala:** maç görselini panoya alır; sohbete doğrudan yapıştırılır.
+  - CSV, Excel'de doğrudan sütunlara açılır: özet, seninle ilgili olaylar, ödüller, iki takımın tablosu, tüm kill'ler.
+  - JSON, maçın tüm verisini uçuş telemetrisiyle birlikte içerir.
+- Tarayıcıdan yazdırırken (Ctrl+P) üst çubuk ve filtreler gizlenir.
+
 ## [0.11.0] - 2026-11-22
 
 ### Eklendi
@@ -123,7 +134,8 @@ esaslıdır; sürüm numaraları [Anlamsal Sürümleme](https://semver.org/lang/
 - Oyunun yerel 8111 arayüzünü maç boyunca kaydeden telemetri kaydedici ve oturum inceleyici.
 - Oyunsuz test için sahte 8111 sunucusu.
 
-[0.11.0]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/v0.10.1...HEAD
+[0.12.0]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/677e58d...HEAD
+[0.11.0]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/v0.10.1...677e58d
 [0.10.1]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/249b1bf...v0.10.1
 [0.10.0]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/440275e...249b1bf
 [0.9.0]: https://github.com/EnderkingTR/War-Thunder-Black-Box/compare/b44fd23...440275e

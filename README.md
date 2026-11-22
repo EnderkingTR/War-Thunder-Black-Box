@@ -8,7 +8,7 @@
 ![Bağımlılık](https://img.shields.io/badge/ba%C4%9F%C4%B1ml%C4%B1l%C4%B1k-yok%20(stdlib)-2ea44f)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
 ![Lisans](https://img.shields.io/badge/lisans-MIT-blue)
-![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-0.11.0-orange)
+![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-0.12.0-orange)
 
 [Özellikler](#özellikler) · [Ekran görüntüleri](#ekran-görüntüleri) · [Kurulum](#kurulum) · [Kullanım](#kullanım) ·
 [Nasıl çalışır](#nasıl-çalışır) · [Analiz yöntemleri](#analiz-yöntemleri) · [Değişiklik günlüğü](CHANGELOG.md)
@@ -37,6 +37,8 @@ gelişmediğin. Öncelik hava muharebeleri (Air RB); kara muharebeleri de destek
 **Analiz**
 - **Özet:** K/D, kazanma oranı, üs/maç, SL/RP (maç ve dakika başına), son 40 maçın şeridi, güçlü ve zayıf yönler, lobiyle kıyas.
 - **Maç detayı:** zaman çizelgesi, uçuş profili (irtifa, hız, G), harita üzerinde rota, ödüller, iki takımın tablosu.
+- **Dışa aktarma:** maç analizini tek tıkla **PDF**, **PNG**, **CSV** ya da **JSON** olarak indir; **Kopyala** ile görseli
+  panoya alıp WhatsApp veya Discord'a doğrudan yapıştır. PDF ve PNG, sayfanın seçili temasıyla birebir aynı görünür.
 - **Beceri:** seni düşüren silah türleri (radar/IR füze, top, SAM, kaza) aynı maçlardaki lobiye göre; vurulmadan önceki
   15 saniyede notch, multipath, soğuk kaçış ve manevra analizi; enerji yönetimi, art yakıcı, takımın önünde uçma; somut öneriler.
 - **Üs bombalama:** ton hasarı değil **alınan üs sayısı**; ilk üssün zamanı, üsler arası süre, üs almadan düşme oranı,
@@ -182,6 +184,7 @@ blackbox/
   results_text.py         savaş sonucu metni ayrıştırıcı
   killfeed.py             Türkçe/İngilizce kill feed ayrıştırıcı
   queries.py, web.py      analiz sorguları, yerel HTTP sunucu ve JSON API
+  export.py               maç dışa aktarma (JSON, CSV; PDF/PNG için Chrome ya da Edge)
   static/                 arayüz (vanilla JS, SVG grafikler)
 recorder/
   record.py               8111 telemetri kaydedici
@@ -199,6 +202,8 @@ tests/                    birim testleri
   okuyucuyu bozabilir.
 - "En yakın düşman" yalnızca minimapte görünen (tespit edilmiş) düşmanları kapsar.
 - Arayüz ve sonuç metni ayrıştırıcı Türkçe oyun dili için yazıldı; kill feed İngilizce de tanınır.
+- PDF ve PNG dışa aktarma bilgisayarda Chrome ya da Edge ister (Windows 11'de Edge hazır gelir). PDF, sayfanın
+  görüntüsünden oluşur; içindeki yazı seçilemez. Tablo verisi için CSV ya da JSON'u kullan.
 
 ## Geliştirme
 

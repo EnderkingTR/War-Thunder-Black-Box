@@ -15,9 +15,9 @@ import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-from . import db, importer, queries
+from . import db, export, importer, queries
 
 STATIC = Path(__file__).resolve().parent / "static"
 _import_lock = threading.Lock()
@@ -32,7 +32,7 @@ def _paths(players: list[str]) -> dict:
     return {p: db.path_for(p, i == 0) for i, p in enumerate(players)}
 
 
-def make_handler(players: list[str], replay_dir: Path):
+def make_handler(players: list[str], replay_dir: Path, browser_path: str | None = None):
     paths = _paths(players)
     class Handler(BaseHTTPRequestHandler):
         server_version = "BlackBox"
@@ -76,6 +76,44 @@ def make_handler(players: list[str], replay_dir: Path):
                 return
             self._json({"error": "not found"}, 404)
 
+        def _export(self, con, me: str, sid: str, qs: dict):
+            # same guard as POST: other web pages cannot make us start a browser
+            if self.headers.get("X-BlackBox") != "1":
+                return self._json({"error": "forbidden"}, 403)
+            fmt = (qs.get("fmt") or ["json"])[0]
+            if fmt not in export.CONTENT_TYPES:
+                return self._json({"error": "bilinmeyen biçim"}, 400)
+            data = queries.battle(con, sid)
+            if not data:
+                return self._json({"error": "maç bulunamadı"}, 404)
+            if fmt == "json":
+                mid = data["battle"].get("match_id")
+                body = export.to_json(data, queries.telemetry(con, mid) if mid else None)
+            elif fmt == "csv":
+                body = export.to_csv(data)
+            else:
+                browser = export.find_browser(browser_path)
+                if not browser:
+                    return self._json({"error": "PDF/PNG için Chrome ya da Edge bulunamadı."}, 501)
+                theme = (qs.get("theme") or ["paper"])[0]
+                theme = theme if theme in ("paper", "graphite", "olive", "arctic") else "paper"
+                q = urlencode({"export": fmt, "theme": theme, "player": me})
+                url = f"http://127.0.0.1:{self.server.server_address[1]}/?{q}"
+                try:
+                    b = data["battle"]
+                    title = f"BlackBox - {b.get('map') or ''} {(b.get('started') or '')[:16].replace('T', ' ')}"
+                    body = export.render(fmt, url, f"#/mac/{quote(sid)}", browser, title)
+                except export.RenderError as e:
+                    return self._json({"error": str(e)}, 500)
+            name = export.filename(data, fmt)
+            self.send_response(200)
+            self.send_header("Content-Type", export.CONTENT_TYPES[fmt])
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition", f"attachment; filename=\"{name}\"; filename*=UTF-8''{quote(name)}")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
         def _static(self, path: str):
             rel = unquote(path).lstrip("/") or "index.html"
             f = (STATIC / rel).resolve()
@@ -102,6 +140,8 @@ def make_handler(players: list[str], replay_dir: Path):
                 if parts[0] == "battle" and len(parts) == 2:
                     b = queries.battle(con, parts[1])
                     return self._json(b) if b else self._json({"error": "not found"}, 404)
+                if parts[0] == "export" and len(parts) == 2:
+                    return self._export(con, me, parts[1], qs)
                 if parts[0] == "telemetry" and len(parts) == 2:
                     t = queries.telemetry(con, parts[1])
                     return self._json(t) if t else self._json({"error": "not found"}, 404)

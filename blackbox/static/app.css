@@ -406,3 +406,30 @@ svg.chart .grid-label { font-family: var(--font-ui); font-size: 9px; fill: var(-
 .closed h1 { font-weight: 800; font-stretch: 125%; letter-spacing: 0.02em; margin: 18px 0 10px; }
 .closed .brand-mark { display: inline-block; width: 36px; height: 36px; }
 .closed .brand-mark::after { left: 8px; right: 8px; top: 16px; height: 4px; }
+
+/* export: menu on the match page */
+.export-menu { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.export-menu .export-label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-right: 4px; }
+.export-menu .btn { padding: 6px 10px; font-size: 12px; }
+
+/* export view rendered by headless Chrome/Edge (PDF, PNG) and the browser's own print */
+.export-foot { display: none; }
+html.export { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+html.export .topbar, html.export .filterbar, html.export .back, html.export .export-menu,
+html.export .readout, html.export .tip { display: none !important; }
+html.export main { max-width: none; padding: 28px 32px 0; }
+html.export .export-foot { display: flex; justify-content: space-between; margin-top: var(--gap); padding: 14px 0 26px;
+  border-top: 1px solid var(--rule); color: var(--ink-3); font-size: 12px; }
+html.export .export-foot b { color: var(--ink-2); }
+html.export .kpis { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+html.export .kpi .v, html.export .kpi .value { white-space: nowrap; }
+@media print {
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .topbar, .filterbar, .back, .export-menu, .readout, .tip, .toast { display: none !important; }
+  html:not(.export) main { max-width: none; padding: 0; }
+  html:not(.export) .panel { break-inside: avoid; }
+}
+@media (max-width: 760px) {
+  .detail-head { grid-template-columns: 1fr; }
+  .export-menu { justify-content: flex-start; }
+}

@@ -24,7 +24,7 @@ const store = {
 
 async function api(path, params) {
   // several player profiles: every request names the selected one
-  if (state.players && state.players.length > 1) params = { ...(params || {}), player: state.player };
+  if ((state.players && state.players.length > 1) || (state.export && state.player)) params = { ...(params || {}), player: state.player };
   const q = params ? "?" + new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString() : "";
   const r = await fetch(`/api/${path}${q}`);
   const j = await r.json();
@@ -686,6 +686,14 @@ async function pageBattle(view, sid) {
   <div class="detail-head"><div>
     <h1>${esc(b.map || "?")}</h1>
     <div class="meta">${resultTag(b.result)}<span>${esc(b.mode || b.battle_class || "")}</span><span class="num">${dt(b.started)}</span><span>${esc(b.vehicle_name || "")}</span><span class="num">${mmss(end)}</span><span class="src">oturum ${esc(b.session_id)}</span></div>
+  </div>
+  <div class="export-menu" data-sid="${esc(b.session_id)}">
+    <span class="export-label">Dışa aktar</span>
+    <button type="button" class="btn ghost" data-export="pdf" title="Paylaşmak ya da yazdırmak için PDF">PDF</button>
+    <button type="button" class="btn ghost" data-export="png" title="Görsel olarak indir">PNG</button>
+    <button type="button" class="btn ghost" data-export="png-copy" title="Görseli panoya kopyala; WhatsApp ya da Discord'a doğrudan yapıştır">Kopyala</button>
+    <button type="button" class="btn ghost" data-export="csv" title="Excel'de açılır: özet, olaylar, ödüller, takımlar, tüm kill'ler">CSV</button>
+    <button type="button" class="btn ghost" data-export="json" title="Tüm maç verisi (uçuş telemetrisi dahil)">JSON</button>
   </div></div>
   <div class="grid">
     <section class="panel c12">${kpis([
@@ -886,6 +894,82 @@ async function quitApp() {
     <p class="dim">Bu sekmeyi kapatabilirsin.</p></div>`;
 }
 
+// ---------------------------------------------------------------- export
+async function exportBattle(btn) {
+  const menu = btn.closest(".export-menu");
+  const kind = btn.dataset.export;
+  const fmt = kind === "png-copy" ? "png" : kind;
+  const label = btn.textContent;
+  $$("button", menu).forEach((b) => (b.disabled = true));
+  btn.textContent = fmt === "pdf" || fmt === "png" ? "Hazırlanıyor…" : "…";
+  const params = { fmt, theme: document.documentElement.dataset.theme || "paper" };
+  if (state.players && state.players.length > 1) params.player = state.player;
+  const req = fetch(`/api/export/${encodeURIComponent(menu.dataset.sid)}?${new URLSearchParams(params)}`, { headers: { "X-BlackBox": "1" } })
+    .then(async (r) => {
+      if (!r.ok) {
+        let msg = r.statusText;
+        try { msg = (await r.json()).error || msg; } catch { /* not json */ }
+        throw new Error(msg);
+      }
+      return r;
+    });
+  try {
+    if (kind === "png-copy") {
+      // Browsers allow clipboard writes only right after the click, and the image takes seconds to render:
+      // hand the clipboard a promise now, still inside the click, and let it wait for the image.
+      let failed = null;
+      const png = req.then((r) => r.blob()).catch((e) => { failed = e; throw e; });
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+      } catch (e) {
+        if (failed) throw failed;
+        throw new Error("tarayıcı görseli panoya kopyalamaya izin vermedi; PNG'yi indir");
+      }
+      toast("Maç görseli panoya kopyalandı; sohbete yapıştırabilirsin.");
+      return;
+    }
+    const r = await req;
+    const m = (r.headers.get("Content-Disposition") || "").match(/filename\*=UTF-8''([^;]+)/);
+    const name = m ? decodeURIComponent(m[1]) : `BlackBox.${fmt}`;
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    toast(`${name} indirildi.`);
+  } catch (e) {
+    toast(`Dışa aktarılamadı: ${e.message}`);
+  } finally {
+    btn.textContent = label;
+    $$("button", menu).forEach((b) => (b.disabled = false));
+  }
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-export]");
+  if (b && !b.disabled) exportBattle(b);
+});
+
+// Export view (?export=pdf|png): what headless Chrome/Edge renders for PDF and PNG. No top bar or buttons,
+// a footer, and the full page height reported back through data-export-h.
+async function bootExport(qp) {
+  const html = document.documentElement;
+  html.classList.add("export");
+  html.dataset.theme = qp.get("theme") || "paper";
+  state.player = qp.get("player") || "";
+  await route();
+  if (state.routeError) { html.dataset.exportError = state.routeError; return; }
+  const foot = document.createElement("footer");
+  foot.className = "export-foot";
+  foot.innerHTML = `<span><b>War Thunder BlackBox</b> · maç analizi</span><span>${esc(new Date().toLocaleDateString("tr-TR", { day: "numeric", month: "long", year: "numeric" }))}</span>`;
+  $("#view").appendChild(foot);
+  try { await document.fonts.ready; } catch { /* ignore */ }
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  html.dataset.exportH = Math.ceil(document.documentElement.scrollHeight);
+}
+
 function toast(msg) {
   const el = document.createElement("div");
   el.className = "toast";
@@ -914,9 +998,10 @@ async function route() {
     else await (routes[page] || pageSummary)(tmp);
     if (seq !== routeSeq) return;
     view.replaceChildren(...tmp.childNodes);
-    if (tmp._afterMount) tmp._afterMount();
+    if (tmp._afterMount) await tmp._afterMount();
   } catch (e) {
     if (seq !== routeSeq) return;
+    state.routeError = e.message;
     view.innerHTML = `<div class="grid">${panel("Hata", empty("Veri yüklenemedi.", esc(e.message)))}</div>`;
   }
   window.scrollTo(0, 0);
@@ -924,6 +1009,9 @@ async function route() {
 
 // ---------------------------------------------------------------- boot
 (async function boot() {
+  const qp = new URLSearchParams(location.search);
+  state.export = qp.get("export") || "";
+  if (state.export) return bootExport(qp);
   setTheme(document.documentElement.dataset.theme || "paper");
   $$(".themes button").forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.themeSet)));
   $("#importBtn").addEventListener("click", runImport);
